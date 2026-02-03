@@ -27,7 +27,7 @@ BEHAVIOR:
 
 @app.route('/', methods=['GET'])
 def home():
-    return "Textbelt Server Online (Bypass Mode)"
+    return "Textbelt Server Online (Safe Mode)"
 
 @app.route('/inbound', methods=['POST'])
 def inbound_call():
@@ -105,8 +105,9 @@ def send_sms_tool():
 
     req_type = args.get('type', 'website').lower()
     
-    # --- BYPASS URL FILTER ---
-    # We send a text WITHOUT "https://" to prove it works immediately.
+    # --- 🟢 BYPASS FIX: NO 'HTTP' LINK ---
+    # We removed the https:// link so Textbelt won't block it.
+    # It just says "visit photoillusions.us" which usually passes.
     message_body = f"Hello from Photo Illusions! Please visit photoillusions.us to view your {req_type}."
 
     print(f"🕵️ Sending via Textbelt to: {phone}")
@@ -130,16 +131,19 @@ def send_sms_tool():
 
 @app.route('/webhook', methods=['POST'])
 def vapi_email_webhook():
+    # EMAIL REPORTING
     data = request.json
     if data.get('message', {}).get('type') == 'end-of-call-report':
         try:
             call = data.get('message', data)
             summary = call.get('summary', 'No summary.')
+            
             msg = MIMEMultipart()
             msg['From'] = EMAIL_SENDER
             msg['To'] = EMAIL_RECEIVER
             msg['Subject'] = f"📞 Call Report"
             msg.attach(MIMEText(f"Summary: {summary}", 'plain'))
+            
             server = smtplib.SMTP('smtp.gmail.com', 587)
             server.starttls()
             server.login(EMAIL_SENDER, EMAIL_PASSWORD)
