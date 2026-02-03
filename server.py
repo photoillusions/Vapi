@@ -1,9 +1,9 @@
 import os
+import requests
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from flask import Flask, request, jsonify
-from twilio.rest import Client
 
 app = Flask(__name__)
 
@@ -11,9 +11,8 @@ app = Flask(__name__)
 EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
 EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
-TWILIO_SID = os.environ.get("TWILIO_SID")
-TWILIO_TOKEN = os.environ.get("TWILIO_TOKEN")
-TWILIO_FROM_NUMBER = os.environ.get("TWILIO_FROM_NUMBER")
+# We don't need Twilio keys anymore!
+# TEXTBELT_KEY = os.environ.get("TEXTBELT_KEY", "textbelt") # Use "textbelt" for free test
 
 # --- LINKS ---
 LINKS = {
@@ -37,7 +36,7 @@ BEHAVIOR:
 
 @app.route('/', methods=['GET'])
 def home():
-    return "Master Vapi Server Online"
+    return "Master Vapi Server Online (Textbelt Edition)"
 
 # --- 1. CALL SETTINGS (Runs when phone rings) ---
 @app.route('/inbound', methods=['POST'])
@@ -74,22 +73,30 @@ def inbound_call():
                 "provider": "deepgram",
                 "model": "nova-2",
                 "language": "en-US",
-                "endpointing": 1200  # <--- THIS IS THE MAGIC NUMBER (1.2 seconds silence)
+                "endpointing": 1500  # Waits 1.5 seconds before responding
             },
-            "voice": {
+             "voice": {
                 "provider": "11labs",
-                "voiceId": "burt" # or your preferred voice ID
+                "voiceId": "burt"
             }
         }
     }
     return jsonify(response), 200
 
-# --- 2. SMS TOOL (Smart Caller ID) ---
+# --- 2. SMS TOOL (Textbelt Version) ---
 @app.route('/send-sms', methods=['POST'])
 def send_sms_tool():
     data = request.json
     print(f"📩 SMS Triggered")
 
+    # 1. AUTO-DETECT PHONE NUMBER
+    system_phone = None
+    try:
+        system_phone = data.get('message', {}).get('call', {}).get('customer', {}).get('number')
+        if not system_phone:
+             system_phone = data.get('message', {}).get('customer', {}).get('number')
+    except: pass
+    
     # Extract args
     args = {}
     tool_call_id = "unknown"
@@ -102,32 +109,30 @@ def send_sms_tool():
             args = data
     except: args = data
 
-    # AUTO-DETECT PHONE NUMBER
-    phone = args.get('phone')
-    if not phone or phone == "current":
-        # Grab the real Caller ID from the Vapi call data
-        try:
-            phone = data.get('message', {}).get('call', {}).get('customer', {}).get('number')
-            # Fallback location for some Vapi versions
-            if not phone:
-                 phone = data.get('message', {}).get('customer', {}).get('number')
-        except: pass
-
+    # FORCE USE OF SYSTEM PHONE
+    phone = system_phone if system_phone else args.get('phone')
     req_type = args.get('type', 'website').lower()
     
-    if not phone:
-        return jsonify({"results": [{"toolCallId": tool_call_id, "result": "Error: Could not find phone number"}]}), 200
+    print(f"🕵️ Sending to: {phone} for {req_type}")
+
+    if not phone or len(phone) < 10:
+        return jsonify({"results": [{"toolCallId": tool_call_id, "result": "Error: Phone number invalid or missing."}]}), 200
 
     link = LINKS.get(req_type, LINKS['website'])
-    body = f"Hello from Photo Illusions! Here is the {req_type} link: {link}"
+    message_body = f"Hello from Photo Illusions! Here is the {req_type} link: {link}"
     
+    # --- TEXTBELT MAGIC HERE ---
     try:
-        client = Client(TWILIO_SID, TWILIO_TOKEN)
-        if not phone.startswith('+'): phone = f"+{phone}"
-        client.messages.create(body=body, from_=TWILIO_FROM_NUMBER, to=phone)
-        return jsonify({"results": [{"toolCallId": tool_call_id, "result": "SMS Sent Successfully"}]}), 200
+        resp = requests.post('https://textbelt.com/text', {
+            'phone': phone,
+            'message': message_body,
+            'key': 'textbelt', # Use 'textbelt' for free daily test. Buy a key for real use.
+        })
+        print(f"Textbelt Response: {resp.json()}")
+        
+        return jsonify({"results": [{"toolCallId": tool_call_id, "result": "SMS Sent Successfully via Textbelt"}]}), 200
     except Exception as e:
-        print(f"Twilio Error: {e}")
+        print(f"❌ SMS Error: {e}")
         return jsonify({"results": [{"toolCallId": tool_call_id, "result": "Failed"}]}), 200
 
 # --- 3. EMAIL REPORT ---
