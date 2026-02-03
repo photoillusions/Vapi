@@ -21,12 +21,11 @@ TWILIO_FROM_NUMBER = os.environ.get("TWILIO_FROM_NUMBER")
 # --- DATABASE OF LINKS ---
 # UPDATE THESE with your real links!
 LINKS = {
-    "contract": "https://www.photoillusions.us/contract-page",
-    "payment": "https://dashboard.stripe.com/acct_1AN9bKKAiHY3duEM/payments",
+    "reservation": "https://photo-illusions-customer-registration.onrender.com/Form.html",
+    "payment": "https://photo-illusions-customer-registration.onrender.com/Form.html",
     "website": "https://www.photoillusions.us",
     "gallery": "https://www.photoillusions.us/gallery",
-    "booking": "https://www.cognitoforms.com/photoillusions1/photoillusionseventregistration",
-    "form": "https://www.photoillusions.us/general-form"
+    "packages": "https://photoillusions.github.io/photo-illusions-flyer/",
 }
 
 @app.route('/', methods=['GET'])
@@ -128,3 +127,4 @@ def send_email_notification(data):
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
+
