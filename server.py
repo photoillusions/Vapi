@@ -11,8 +11,9 @@ app = Flask(__name__)
 EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
 EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
-# Pull the paid key from Render settings
-TEXTBELT_KEY = os.environ.get("TEXTBELT_KEY")
+
+# 🟢 YOUR PAID KEY IS HERE NOW:
+TEXTBELT_KEY = "16a936d2a66e18000d8c57368fcae722fe0a5b828xPcizMtmZJDkwXPVBxzcSJTJ"
 
 # --- LINKS ---
 LINKS = {
@@ -36,7 +37,7 @@ BEHAVIOR:
 
 @app.route('/', methods=['GET'])
 def home():
-    return "Textbelt Server Online (Paid Version)"
+    return "Textbelt Server Online (Key Hardcoded)"
 
 # --- 1. CALL SETTINGS (Runs when phone rings) ---
 @app.route('/inbound', methods=['POST'])
@@ -83,7 +84,7 @@ def inbound_call():
     }
     return jsonify(response), 200
 
-# --- 2. SMS TOOL (Textbelt Paid) ---
+# --- 2. SMS TOOL (Paid Key) ---
 @app.route('/send-sms', methods=['POST'])
 def send_sms_tool():
     data = request.json
@@ -123,20 +124,15 @@ def send_sms_tool():
     if not phone:
         return jsonify({"result": "Error: No phone number found"}), 200
 
-    # 3. SEND VIA TEXTBELT (PAID KEY)
+    # 3. SEND VIA TEXTBELT (USING YOUR KEY)
     try:
-        if not TEXTBELT_KEY:
-            print("❌ Error: Missing TEXTBELT_KEY in Render settings.")
-            return jsonify({"result": "Error: Server Misconfigured"}), 200
-
         resp = requests.post('https://textbelt.com/text', {
             'phone': phone,
             'message': f"Hello from Photo Illusions! Here is your {req_type} link: {link}",
-            'key': TEXTBELT_KEY, # Uses the key you saved in Render
+            'key': TEXTBELT_KEY, 
         })
         print(f"Textbelt Result: {resp.text}")
         
-        # Check if Textbelt reported success
         if resp.json().get('success'):
             return jsonify({"result": "SMS Sent Successfully"}), 200
         else:
