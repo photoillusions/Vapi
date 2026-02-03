@@ -16,82 +16,30 @@ TWILIO_TOKEN = os.environ.get("TWILIO_TOKEN")
 TWILIO_FROM_NUMBER = os.environ.get("TWILIO_FROM_NUMBER")
 
 # --- LINKS DATABASE ---
+# UPDATE THESE with your real links!
 LINKS = {
-    "reservation": "https://photo-illusions-customer-registration.onrender.com/Form.html",
-    "payment": "https://photo-illusions-customer-registration.onrender.com/Form.html",
+    "contract": "https://www.photoillusions.us/contract-page",
+    "payment": "https://dashboard.stripe.com/acct_1AN9bKKAiHY3duEM/payments",
     "website": "https://www.photoillusions.us",
     "gallery": "https://www.photoillusions.us/gallery",
-    "packages": "https://photoillusions.github.io/photo-illusions-flyer/",
+    "booking": "https://www.cognitoforms.com/photoillusions1/photoillusionseventregistration",
+    "form": "https://www.photoillusions.us/general-form"
 }
 
-# --- YOUR AI BRAIN (Paste your Dashboard Prompt here) ---
+# --- SYSTEM PROMPT ---
 SYSTEM_PROMPT = """
-### ROLE
-You are "Mary," the Event Coordinator for Photo Illusions.
-**Tone:** Calm, patient, and relaxed. DO NOT RUSH.
-**Company Tagline:** "We are AI Imaging Artists and Photo Engineers."
-**Core Services:** Photography, AI Digital Entertainment, Special Events, Home Shoots, Daycares, and Church Fundraisers.
+You are the AI Receptionist for Photo Illusions, a premier event photography company.
+Your goal is to help customers book events, check availability, and get contracts.
 
-### CRITICAL RULES
-1. **Patience:** Wait for the user to finish speaking. Do not interrupt.
-2. **NO Reading URLs:** Never read "http" links.
-3. **Hidden Pricing (Standard):** Standard NJ Event Deposit is $150. **NEVER** mention this unless asked.
-4. **Premium Pricing (AI/NY):** New York events OR "AI Digital Entertainment" packages require a **$250 Reservation Fee**.
-5. **SPAM DEFENSE:** If caller is a robot/solicitor, say "Remove us from your list" and END CALL immediately.
+KEY BEHAVIORS:
+1. Be professional, warm, and concise.
+2. If they want to book, ask for the Date and Location.
+3. If they ask for a contract, payment link, or form, use the 'send_sms_link' tool immediately.
+   Say: "I've just sent that link to your phone."
 
-### SCENARIO 1: THE INTRO
-* **You:** "Thanks for calling Photo Illusions, home of the AI Imaging Artists and Photo Engineers! This is Mary. Are you calling about a Special Event, School, or Church Fundraiser?"
-
-### SCENARIO 2: MISSING PHOTOS / EMAIL LOOKUP
-**Goal:** Explain Deadline -> Spam Check -> Text Action.
-* **Customer:** "I didn't get my photos."
-* **You:** "I can help with that. First, just so you know, all photo galleries are sent out no later than **Tuesday Evening** following the event."
-* **You (The Check):** "If it is past Tuesday, please check your **Spam or Junk folder**, as our emails often end up there."
-* **You (The Action):** "If you still don't see it, please **text your email address** to this number after we hang up. The owner will locate your files and text you an update."
-
-### SCENARIO 3: BOOKING (Special Events & AI)
-**Goal:** Check Location & Sell AI Feature.
-* **Customer:** "A Special Event."
-* **You:** "Wonderful. We specialize in live Digital Entertainment. What is the date and location of your event?"
-* **Customer:** [Gives Date and Location]
-* **Logic Check:**
-  - **If New York:** "Since that is in New York, we do have a minimum **$250 Reservation Fee** to cover the distance. Does that work for you?"
-  - **If New Jersey:** "We have availability then. Just a quick note: we do need a table, a chair, and an electrical outlet nearby. Will that be available?"
-* **Customer:** "Yes."
-* **You (The AI Upsell):** "Great. Did you want our standard package, or the new **AI Digital Entertainment** experience where we style the photos with AI?"
-  - **If AI:** "That is our most popular choice! It has a **$250 Reservation Fee**, but it comes with your first **10 8x10 prints for free**. I can text you the link to lock that in."
-  - **If Standard:** "Perfect. I’ll have the owner text you the registration link. What is the best mobile number?"
-
-### SCENARIO 4: CHURCH FUNDRAISERS
-* **Customer:** "Church Fundraiser."
-* **You:** "We love working with churches! The Ministry sells a minimum of **20 packages** for **$50 each**. That includes 3 poses, 3 prints, and 3 digital emails."
-* **You (The Warning):** "If there are under 20 reservations, we require a $75 reservation and sitting fee. Does that work?"
-
-### SCENARIO 5: DAYCARE & SCHOOLS
-* **Customer:** "Daycare" or "School."
-* **You:** "Yes! Our turnaround time is fast—usually **7 to 10 days**. Packages start as low as **$20 per student**."
-* **You (The Warning):** "If the school has **under 15 students**, there is a $75 reservation and sitting fee. Does that sound good?"
-
-### SCENARIO 6: HOME SHOOTS
-* **Customer:** "I want a home shoot."
-* **You:** "We’d love to come to you. I will have the owner text you our booking calendar. What is your mobile number?"
-
-### SCENARIO 7: TAKING A MESSAGE
-* **Customer:** "Can I leave a message?"
-* **You:** "The owner is currently setting up an event, but I can take a message. Go ahead, I'm listening."
-
-### SCENARIO 8: Spam Calls
-* **Customer:** "Press 9 to remove us from your call list"
-* **You:** "Press "9" on the Keypad"
-
-### SCENARIO 9: Photo Editing * **Customer:** "Do photo illusions Restore or Edit other photos from customers"
-* **You:** "Yes, we can edit you photo for you, simply text a copy of the photo to this number and one of our Editors will contact you"
-
-"SMS CAPABILITIES: You have a tool called 'send_sms_link' that can text the user contracts, payment links, gallery links, or forms.
-
-If the user asks for any of these items, do NOT read the URL out loud. Instead, IMMEDIATELY call the 'send_sms_link' tool with the correct type (e.g., 'contract', 'payment', 'booking').
-
-After calling the tool: Say something like: 'I've just sent that link to your phone numbers ending in [last 4 digits].'"
+SMS INSTRUCTIONS:
+- Never read URLs out loud.
+- Always use the tool to send them.
 """
 
 @app.route('/', methods=['GET'])
@@ -101,12 +49,11 @@ def home():
 # --- 1. THE BRAIN (Vapi asks this when a call starts) ---
 @app.route('/inbound', methods=['POST'])
 def inbound_call():
-    print("📞 New Call Incoming!")
+    print("📞 New Call Incoming - Loading Assistant Config")
     
-    # We return the ENTIRE assistant configuration dynamically
     response = {
         "assistant": {
-            "firstMessage": "Thank you for calling Photo Illusions. This is the automated assistant. How can I help you today?",
+            "firstMessage": "Thank you for calling Photo Illusions. How can I help you today?",
             "model": {
                 "provider": "openai",
                 "model": "gpt-4o-mini",
@@ -119,6 +66,7 @@ def inbound_call():
                 "tools": [
                     {
                         "type": "function",
+                        "async": False,
                         "function": {
                             "name": "send_sms_link",
                             "description": "Sends a text message with a contract, payment link, or form.",
@@ -130,13 +78,17 @@ def inbound_call():
                                 },
                                 "required": ["phone", "type"]
                             }
+                        },
+                        # THIS WAS THE MISSING PIECE:
+                        "server": {
+                            "url": "https://vapi-mvsk.onrender.com/send-sms"
                         }
                     }
                 ]
             },
             "voice": {
                 "provider": "11labs",
-                "voiceId": "burt" # Change this to your preferred voice ID
+                "voiceId": "burt"
             }
         }
     }
@@ -145,28 +97,54 @@ def inbound_call():
 # --- 2. SMS TOOL (The AI triggers this) ---
 @app.route('/send-sms', methods=['POST'])
 def send_sms_tool():
+    print("🚀 SMS Tool Triggered!")
     data = request.json
-    tool_call = data.get('message', {}).get('toolCalls', [{}])[0]
-    args = tool_call.get('function', {}).get('arguments', {})
-    if not args: args = data 
+    
+    # Handle different Vapi payload structures
+    args = {}
+    if 'message' in data and 'toolCalls' in data['message']:
+        args = data['message']['toolCalls'][0]['function']['arguments']
+        tool_call_id = data['message']['toolCalls'][0]['id']
+    else:
+        # Direct call fallback
+        args = data
+        tool_call_id = "unknown"
 
     phone = args.get('phone')
     req_type = args.get('type', 'website').lower()
     
-    if not phone: return jsonify({"error": "No phone"}), 400
+    print(f"Attempting to send {req_type} to {phone}")
+
+    if not phone: 
+        return jsonify({"results": [{"toolCallId": tool_call_id, "result": "Error: No phone number"}]}), 200
 
     link = LINKS.get(req_type, LINKS['website'])
     body = f"Hello from Photo Illusions! Here is the {req_type} link: {link}"
     
     try:
         client = Client(TWILIO_SID, TWILIO_TOKEN)
-        client.messages.create(body=body, from_=TWILIO_FROM_NUMBER, to=phone)
-        return jsonify({"results": [{"toolCallId": tool_call.get('id'), "result": "SMS Sent"}]}), 200
+        msg = client.messages.create(body=body, from_=TWILIO_FROM_NUMBER, to=phone)
+        print(f"✅ SMS Sent! SID: {msg.sid}")
+        return jsonify({
+            "results": [
+                {
+                    "toolCallId": tool_call_id,
+                    "result": "SMS Sent successfully"
+                }
+            ]
+        }), 200
     except Exception as e:
-        print(f"Twilio Error: {e}")
-        return jsonify({"error": str(e)}), 500
+        print(f"❌ Twilio Error: {e}")
+        return jsonify({
+            "results": [
+                {
+                    "toolCallId": tool_call_id,
+                    "result": f"Error sending SMS: {str(e)}"
+                }
+            ]
+        }), 200
 
-# --- 3. EMAIL REPORTER (Runs after call ends) ---
+# --- 3. EMAIL REPORTER ---
 @app.route('/webhook', methods=['POST'])
 def vapi_email_webhook():
     data = request.json
@@ -175,12 +153,34 @@ def vapi_email_webhook():
     return jsonify({"status": "OK"}), 200
 
 def send_email_notification(data):
-    # (Same email logic as before - abbreviated for space)
     try:
         call = data.get('message', data)
-        # ... extract fields ...
-        # ... send email ...
-        print("Email sent")
+        transcript = call.get('transcript', 'No transcript.')
+        summary = call.get('summary', 'No summary.')
+        recording = call.get('recordingUrl', '#')
+        customer = call.get('customer', {}).get('number', 'Unknown')
+
+        msg = MIMEMultipart()
+        msg['From'] = EMAIL_SENDER
+        msg['To'] = EMAIL_RECEIVER
+        msg['Subject'] = f"📞 Call Report: {customer}"
+        
+        body = f"""
+        <h2>New Call Finished</h2>
+        <p><strong>Customer:</strong> {customer}</p>
+        <p><strong>Summary:</strong> {summary}</p>
+        <p><a href="{recording}">🎧 Listen to Recording</a></p>
+        <hr>
+        <h3>Transcript</h3>
+        <p>{transcript}</p>
+        """
+        msg.attach(MIMEText(body, 'html'))
+
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+        server.send_message(msg)
+        server.quit()
     except: pass
 
 if __name__ == '__main__':
