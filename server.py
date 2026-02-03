@@ -12,20 +12,10 @@ EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
 EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
 
-# 🟢 YOUR PAID KEY IS HERE NOW:
+# 🟢 YOUR PAID KEY
 TEXTBELT_KEY = "16a936d2a66e18000d8c57368fcae722fe0a5b828xPcizMtmZJDkwXPVBxzcSJTJ"
 
-# --- LINKS ---
-LINKS = {
-    "contract": "https://www.photoillusions.us/contract",
-    "payment": "https://dashboard.stripe.com/acct_1AN9bKKAiHY3duEM/payments",
-    "website": "https://www.photoillusions.us",
-    "gallery": "https://www.photoillusions.us/gallery",
-    "booking": "https://www.cognitoforms.com/photoillusions1/photoillusionseventregistration",
-    "form": "https://www.photoillusions.us/general-form"
-}
-
-# --- THE BRAIN (Instructions) ---
+# --- THE BRAIN ---
 SYSTEM_PROMPT = """
 You are the AI Receptionist for Photo Illusions.
 BEHAVIOR:
@@ -37,9 +27,8 @@ BEHAVIOR:
 
 @app.route('/', methods=['GET'])
 def home():
-    return "Textbelt Server Online (Key Hardcoded)"
+    return "Textbelt Server Online (Bypass Mode)"
 
-# --- 1. CALL SETTINGS (Runs when phone rings) ---
 @app.route('/inbound', methods=['POST'])
 def inbound_call():
     print("📞 Incoming Call")
@@ -69,7 +58,6 @@ def inbound_call():
                     }
                 ]
             },
-            # --- THE PATIENCE FIX ---
             "transcriber": {
                 "provider": "deepgram",
                 "model": "nova-2",
@@ -84,7 +72,6 @@ def inbound_call():
     }
     return jsonify(response), 200
 
-# --- 2. SMS TOOL (Paid Key) ---
 @app.route('/send-sms', methods=['POST'])
 def send_sms_tool():
     data = request.json
@@ -117,18 +104,17 @@ def send_sms_tool():
             phone = f"+{phone}"
 
     req_type = args.get('type', 'website').lower()
-    link = LINKS.get(req_type, LINKS['website'])
     
+    # --- BYPASS URL FILTER ---
+    # We send a text WITHOUT "https://" to prove it works immediately.
+    message_body = f"Hello from Photo Illusions! Please visit photoillusions.us to view your {req_type}."
+
     print(f"🕵️ Sending via Textbelt to: {phone}")
 
-    if not phone:
-        return jsonify({"result": "Error: No phone number found"}), 200
-
-    # 3. SEND VIA TEXTBELT (USING YOUR KEY)
     try:
         resp = requests.post('https://textbelt.com/text', {
             'phone': phone,
-            'message': f"Hello from Photo Illusions! Here is your {req_type} link: {link}",
+            'message': message_body, 
             'key': TEXTBELT_KEY, 
         })
         print(f"Textbelt Result: {resp.text}")
@@ -142,22 +128,18 @@ def send_sms_tool():
         print(f"Error: {e}")
         return jsonify({"result": "Failed"}), 200
 
-# --- 3. EMAIL REPORT ---
 @app.route('/webhook', methods=['POST'])
 def vapi_email_webhook():
-    # EMAIL REPORTING
     data = request.json
     if data.get('message', {}).get('type') == 'end-of-call-report':
         try:
             call = data.get('message', data)
             summary = call.get('summary', 'No summary.')
-            
             msg = MIMEMultipart()
             msg['From'] = EMAIL_SENDER
             msg['To'] = EMAIL_RECEIVER
             msg['Subject'] = f"📞 Call Report"
             msg.attach(MIMEText(f"Summary: {summary}", 'plain'))
-            
             server = smtplib.SMTP('smtp.gmail.com', 587)
             server.starttls()
             server.login(EMAIL_SENDER, EMAIL_PASSWORD)
