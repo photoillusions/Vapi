@@ -24,6 +24,7 @@ LINKS = {
     "form": "https://www.photoillusions.us/general-form"
 }
 
+# --- THE BRAIN (Instructions) ---
 SYSTEM_PROMPT = """
 You are the AI Receptionist for Photo Illusions.
 BEHAVIOR:
@@ -37,6 +38,7 @@ BEHAVIOR:
 def home():
     return "Textbelt Server Online (Paid Version)"
 
+# --- 1. CALL SETTINGS (Runs when phone rings) ---
 @app.route('/inbound', methods=['POST'])
 def inbound_call():
     print("📞 Incoming Call")
@@ -66,6 +68,7 @@ def inbound_call():
                     }
                 ]
             },
+            # --- THE PATIENCE FIX ---
             "transcriber": {
                 "provider": "deepgram",
                 "model": "nova-2",
@@ -80,6 +83,7 @@ def inbound_call():
     }
     return jsonify(response), 200
 
+# --- 2. SMS TOOL (Textbelt Paid) ---
 @app.route('/send-sms', methods=['POST'])
 def send_sms_tool():
     data = request.json
@@ -131,11 +135,18 @@ def send_sms_tool():
             'key': TEXTBELT_KEY, # Uses the key you saved in Render
         })
         print(f"Textbelt Result: {resp.text}")
-        return jsonify({"result": "SMS Sent"}), 200
+        
+        # Check if Textbelt reported success
+        if resp.json().get('success'):
+            return jsonify({"result": "SMS Sent Successfully"}), 200
+        else:
+            return jsonify({"result": f"Failed: {resp.json().get('error')}"}), 200
+
     except Exception as e:
         print(f"Error: {e}")
         return jsonify({"result": "Failed"}), 200
 
+# --- 3. EMAIL REPORT ---
 @app.route('/webhook', methods=['POST'])
 def vapi_email_webhook():
     # EMAIL REPORTING
