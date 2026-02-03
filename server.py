@@ -11,8 +11,7 @@ app = Flask(__name__)
 EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
 EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
-# We don't need Twilio keys anymore!
-# TEXTBELT_KEY = os.environ.get("TEXTBELT_KEY", "textbelt") # Use "textbelt" for free test
+# Note: Textbelt uses "textbelt" as the key for free testing (1 per day)
 
 # --- LINKS ---
 LINKS = {
@@ -24,7 +23,6 @@ LINKS = {
     "form": "https://www.photoillusions.us/general-form"
 }
 
-# --- THE BRAIN (Instructions) ---
 SYSTEM_PROMPT = """
 You are the AI Receptionist for Photo Illusions.
 BEHAVIOR:
@@ -36,12 +34,11 @@ BEHAVIOR:
 
 @app.route('/', methods=['GET'])
 def home():
-    return "Master Vapi Server Online (Textbelt Edition)"
+    return "Textbelt Server Online"
 
-# --- 1. CALL SETTINGS (Runs when phone rings) ---
 @app.route('/inbound', methods=['POST'])
 def inbound_call():
-    print("📞 Incoming Call - Loading Settings...")
+    print("📞 Incoming Call")
     response = {
         "assistant": {
             "firstMessage": "Thank you for calling Photo Illusions. How can I help you today?",
@@ -68,14 +65,13 @@ def inbound_call():
                     }
                 ]
             },
-            # --- THE PATIENCE FIX ---
             "transcriber": {
                 "provider": "deepgram",
                 "model": "nova-2",
                 "language": "en-US",
-                "endpointing": 1500  # Waits 1.5 seconds before responding
+                "endpointing": 1500 # Wait 1.5s (Patience Fix)
             },
-             "voice": {
+            "voice": {
                 "provider": "11labs",
                 "voiceId": "burt"
             }
@@ -83,13 +79,12 @@ def inbound_call():
     }
     return jsonify(response), 200
 
-# --- 2. SMS TOOL (Textbelt Version) ---
 @app.route('/send-sms', methods=['POST'])
 def send_sms_tool():
     data = request.json
     print(f"📩 SMS Triggered")
 
-    # 1. AUTO-DETECT PHONE NUMBER
+    # 1. SMART NUMBER DETECTION
     system_phone = None
     try:
         system_phone = data.get('message', {}).get('call', {}).get('customer', {}).get('number')
@@ -97,72 +92,70 @@ def send_sms_tool():
              system_phone = data.get('message', {}).get('customer', {}).get('number')
     except: pass
     
-    # Extract args
     args = {}
-    tool_call_id = "unknown"
     try:
         if 'message' in data and 'toolCalls' in data['message']:
-            tool_call = data['message']['toolCalls'][0]
-            args = tool_call['function']['arguments']
-            tool_call_id = tool_call['id']
+            args = data['message']['toolCalls'][0]['function']['arguments']
         else:
             args = data
     except: args = data
 
-    # FORCE USE OF SYSTEM PHONE
+    # Prioritize System Caller ID
     phone = system_phone if system_phone else args.get('phone')
+    
+    # 2. FIX US PHONE NUMBERS (The "Invalid Number" Fix)
+    if phone:
+        phone = str(phone).replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+        # If it's 10 digits (856...), add +1
+        if len(phone) == 10:
+            phone = f"+1{phone}"
+        # If it's 11 digits starting with 1 (1856...), add +
+        elif len(phone) == 11 and phone.startswith("1"):
+            phone = f"+{phone}"
+
     req_type = args.get('type', 'website').lower()
-    
-    print(f"🕵️ Sending to: {phone} for {req_type}")
-
-    if not phone or len(phone) < 10:
-        return jsonify({"results": [{"toolCallId": tool_call_id, "result": "Error: Phone number invalid or missing."}]}), 200
-
     link = LINKS.get(req_type, LINKS['website'])
-    message_body = f"Hello from Photo Illusions! Here is the {req_type} link: {link}"
     
-    # --- TEXTBELT MAGIC HERE ---
+    print(f"🕵️ Sending via Textbelt to: {phone}")
+
+    if not phone:
+        return jsonify({"result": "Error: No phone number found"}), 200
+
+    # 3. SEND VIA TEXTBELT
     try:
         resp = requests.post('https://textbelt.com/text', {
             'phone': phone,
-            'message': message_body,
-            'key': 'textbelt', # Use 'textbelt' for free daily test. Buy a key for real use.
+            'message': f"Hello from Photo Illusions! Here is your {req_type} link: {link}",
+            'key': 'textbelt', # FREE KEY (1 per day). Buy a real key at textbelt.com if you like it.
         })
-        print(f"Textbelt Response: {resp.json()}")
-        
-        return jsonify({"results": [{"toolCallId": tool_call_id, "result": "SMS Sent Successfully via Textbelt"}]}), 200
+        print(f"Textbelt Result: {resp.text}")
+        return jsonify({"result": "SMS Sent"}), 200
     except Exception as e:
-        print(f"❌ SMS Error: {e}")
-        return jsonify({"results": [{"toolCallId": tool_call_id, "result": "Failed"}]}), 200
+        print(f"Error: {e}")
+        return jsonify({"result": "Failed"}), 200
 
-# --- 3. EMAIL REPORT ---
 @app.route('/webhook', methods=['POST'])
 def vapi_email_webhook():
+    # EMAIL REPORTING
     data = request.json
     if data.get('message', {}).get('type') == 'end-of-call-report':
-        send_email_notification(data)
+        try:
+            call = data.get('message', data)
+            summary = call.get('summary', 'No summary.')
+            
+            msg = MIMEMultipart()
+            msg['From'] = EMAIL_SENDER
+            msg['To'] = EMAIL_RECEIVER
+            msg['Subject'] = f"📞 Call Report"
+            msg.attach(MIMEText(f"Summary: {summary}", 'plain'))
+            
+            server = smtplib.SMTP('smtp.gmail.com', 587)
+            server.starttls()
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            server.send_message(msg)
+            server.quit()
+        except: pass
     return jsonify({"status": "OK"}), 200
-
-def send_email_notification(data):
-    try:
-        call = data.get('message', data)
-        transcript = call.get('transcript', 'No transcript.')
-        summary = call.get('summary', 'No summary.')
-        recording = call.get('recordingUrl', '#')
-        customer = call.get('customer', {}).get('number', 'Unknown')
-        
-        msg = MIMEMultipart()
-        msg['From'] = EMAIL_SENDER
-        msg['To'] = EMAIL_RECEIVER
-        msg['Subject'] = f"📞 Call Report: {customer}"
-        msg.attach(MIMEText(f"Summary: {summary}\n\nTranscript: {transcript}\n\nRecording: {recording}", 'plain'))
-        
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
-        server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-        server.send_message(msg)
-        server.quit()
-    except: pass
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
