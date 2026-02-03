@@ -18,7 +18,7 @@ TWILIO_FROM_NUMBER = os.environ.get("TWILIO_FROM_NUMBER")
 # --- LINKS DATABASE ---
 # UPDATE THESE with your real links!
 LINKS = {
-    "contract": "https://www.photoillusions.us/contract-page",
+    "contract": "https://www.photoillusions.us/contract",
     "payment": "https://dashboard.stripe.com/acct_1AN9bKKAiHY3duEM/payments",
     "website": "https://www.photoillusions.us",
     "gallery": "https://www.photoillusions.us/gallery",
@@ -26,7 +26,7 @@ LINKS = {
     "form": "https://www.photoillusions.us/general-form"
 }
 
-# --- SYSTEM PROMPT ---
+# --- SYSTEM PROMPT (The Brain) ---
 SYSTEM_PROMPT = """
 You are the AI Receptionist for Photo Illusions, a premier event photography company.
 Your goal is to help customers book events, check availability, and get contracts.
@@ -46,7 +46,8 @@ SMS INSTRUCTIONS:
 def home():
     return "Vapi Brain is Running!"
 
-# --- 1. THE BRAIN (Vapi asks this when a call starts) ---
+# --- 1. INBOUND CALL HANDLER ---
+# This is what Vapi hits when the phone rings.
 @app.route('/inbound', methods=['POST'])
 def inbound_call():
     print("📞 New Call Incoming - Loading Assistant Config")
@@ -79,7 +80,7 @@ def inbound_call():
                                 "required": ["phone", "type"]
                             }
                         },
-                        # THIS WAS THE MISSING PIECE:
+                        # IMPORTANT: Pointing the tool back to THIS server
                         "server": {
                             "url": "https://vapi-mvsk.onrender.com/send-sms"
                         }
@@ -94,21 +95,24 @@ def inbound_call():
     }
     return jsonify(response), 200
 
-# --- 2. SMS TOOL (The AI triggers this) ---
+# --- 2. SMS TOOL HANDLER ---
 @app.route('/send-sms', methods=['POST'])
 def send_sms_tool():
     print("🚀 SMS Tool Triggered!")
     data = request.json
     
-    # Handle different Vapi payload structures
+    # Handle Vapi's different argument structures
     args = {}
-    if 'message' in data and 'toolCalls' in data['message']:
-        args = data['message']['toolCalls'][0]['function']['arguments']
-        tool_call_id = data['message']['toolCalls'][0]['id']
-    else:
-        # Direct call fallback
+    tool_call_id = "unknown"
+    
+    try:
+        if 'message' in data and 'toolCalls' in data['message']:
+            args = data['message']['toolCalls'][0]['function']['arguments']
+            tool_call_id = data['message']['toolCalls'][0]['id']
+        else:
+            args = data
+    except:
         args = data
-        tool_call_id = "unknown"
 
     phone = args.get('phone')
     req_type = args.get('type', 'website').lower()
