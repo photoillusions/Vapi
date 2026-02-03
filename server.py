@@ -11,7 +11,8 @@ app = Flask(__name__)
 EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
 EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
-# Note: Textbelt uses "textbelt" as the key for free testing (1 per day)
+# Pull the paid key from Render settings
+TEXTBELT_KEY = os.environ.get("TEXTBELT_KEY")
 
 # --- LINKS ---
 LINKS = {
@@ -34,7 +35,7 @@ BEHAVIOR:
 
 @app.route('/', methods=['GET'])
 def home():
-    return "Textbelt Server Online"
+    return "Textbelt Server Online (Paid Version)"
 
 @app.route('/inbound', methods=['POST'])
 def inbound_call():
@@ -69,7 +70,7 @@ def inbound_call():
                 "provider": "deepgram",
                 "model": "nova-2",
                 "language": "en-US",
-                "endpointing": 1500 # Wait 1.5s (Patience Fix)
+                "endpointing": 1500
             },
             "voice": {
                 "provider": "11labs",
@@ -100,16 +101,13 @@ def send_sms_tool():
             args = data
     except: args = data
 
-    # Prioritize System Caller ID
     phone = system_phone if system_phone else args.get('phone')
     
-    # 2. FIX US PHONE NUMBERS (The "Invalid Number" Fix)
+    # 2. FIX US PHONE NUMBERS
     if phone:
         phone = str(phone).replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
-        # If it's 10 digits (856...), add +1
         if len(phone) == 10:
             phone = f"+1{phone}"
-        # If it's 11 digits starting with 1 (1856...), add +
         elif len(phone) == 11 and phone.startswith("1"):
             phone = f"+{phone}"
 
@@ -121,12 +119,16 @@ def send_sms_tool():
     if not phone:
         return jsonify({"result": "Error: No phone number found"}), 200
 
-    # 3. SEND VIA TEXTBELT
+    # 3. SEND VIA TEXTBELT (PAID KEY)
     try:
+        if not TEXTBELT_KEY:
+            print("❌ Error: Missing TEXTBELT_KEY in Render settings.")
+            return jsonify({"result": "Error: Server Misconfigured"}), 200
+
         resp = requests.post('https://textbelt.com/text', {
             'phone': phone,
             'message': f"Hello from Photo Illusions! Here is your {req_type} link: {link}",
-            'key': 'textbelt', # FREE KEY (1 per day). Buy a real key at textbelt.com if you like it.
+            'key': TEXTBELT_KEY, # Uses the key you saved in Render
         })
         print(f"Textbelt Result: {resp.text}")
         return jsonify({"result": "SMS Sent"}), 200
