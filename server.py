@@ -3,84 +3,128 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from flask import Flask, request, jsonify
+from twilio.rest import Client
 
 app = Flask(__name__)
 
 # --- CONFIGURATION ---
-# On Render, these come from Environment Variables.
-# For local testing, you can hardcode them temporarily (but don't share this file if you do!)
-EMAIL_SENDER = os.environ.get("EMAIL_SENDER", "your_email@gmail.com")
-EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD", "your_gmail_app_password")
-EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER", "your_email@gmail.com")
+# Email Keys (Already set in Render)
+EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
+EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
+EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
+
+# Twilio Keys (You will add these next)
+TWILIO_SID = os.environ.get("TWILIO_SID")
+TWILIO_TOKEN = os.environ.get("TWILIO_TOKEN")
+TWILIO_FROM_NUMBER = os.environ.get("TWILIO_FROM_NUMBER")
+
+# --- DATABASE OF LINKS ---
+# UPDATE THESE with your real links!
+LINKS = {
+    "contract": "https://www.photoillusions.us/contract-page",
+    "payment": "https://dashboard.stripe.com/acct_1AN9bKKAiHY3duEM/payments",
+    "website": "https://www.photoillusions.us",
+    "gallery": "https://www.photoillusions.us/gallery",
+    "booking": "https://www.cognitoforms.com/photoillusions1/photoillusionseventregistration",
+    "form": "https://www.photoillusions.us/general-form"
+}
 
 @app.route('/', methods=['GET'])
 def home():
-    return "Vapi Email Server is Running!"
+    return "Vapi Command Center (Email + SMS) is Running!"
 
+# --- EMAIL WEBHOOK (Existing) ---
 @app.route('/webhook', methods=['POST'])
-def vapi_webhook():
+def vapi_email_webhook():
     data = request.json
-    print("Received data from Vapi:", data)  # Logs to Render console
-
-    # Vapi sends different message types. We only want the call report.
-    message_type = data.get('message', {}).get('type')
-    
-    # Depending on Vapi version, it might be 'end-of-call-report' or just the data structure
-    # We check if 'call' or 'message' exists.
-    
-    if message_type == 'end-of-call-report' or data.get('message', {}).get('type') == 'end-of-call-report':
+    # Check for end-of-call report
+    if data.get('message', {}).get('type') == 'end-of-call-report':
         send_email_notification(data)
         return jsonify({"status": "Email sent"}), 200
-    
-    # Fallback: sometimes Vapi sends the report directly in the root
-    if 'transcript' in data or 'summary' in data:
-        send_email_notification(data)
-        return jsonify({"status": "Email sent"}), 200
-
     return jsonify({"status": "Ignored"}), 200
+
+# --- SMS TOOL (New) ---
+@app.route('/send-sms', methods=['POST'])
+def send_sms_tool():
+    data = request.json
+    print("SMS Request:", data)
+    
+    # Extract arguments from Vapi tool call
+    tool_call = data.get('message', {}).get('toolCalls', [{}])[0]
+    args = tool_call.get('function', {}).get('arguments', {})
+    
+    # Fallback if Vapi sends arguments directly
+    if not args: args = data
+
+    phone_number = args.get('phone')
+    request_type = args.get('type', 'website').lower() # contract, payment, etc.
+    
+    if not phone_number:
+        return jsonify({"result": "Error: No phone number provided"}), 400
+
+    # 1. Get the correct link
+    link = LINKS.get(request_type, LINKS['website'])
+    
+    # 2. Craft the message
+    message_body = f"Hello from Photo Illusions! Here is the {request_type} link you requested: {link}"
+    
+    # 3. Send via Twilio
+    try:
+        client = Client(TWILIO_SID, TWILIO_TOKEN)
+        message = client.messages.create(
+            body=message_body,
+            from_=TWILIO_FROM_NUMBER,
+            to=phone_number
+        )
+        print(f"SMS sent to {phone_number}: {message.sid}")
+        
+        return jsonify({
+            "results": [{
+                "toolCallId": tool_call.get('id'),
+                "result": f"Successfully sent {request_type} link to user."
+            }]
+        }), 200
+        
+    except Exception as e:
+        print(f"Twilio Error: {e}")
+        return jsonify({
+            "results": [{
+                "toolCallId": tool_call.get('id'),
+                "result": f"Failed to send SMS: {str(e)}"
+            }]
+        }), 500
 
 def send_email_notification(data):
     try:
-        # Extract details from Vapi JSON
-        # Note: The structure depends on your specific Vapi output settings
-        call_details = data.get('message', data)
-        transcript = call_details.get('transcript', 'No transcript available.')
-        summary = call_details.get('summary', 'No summary available.')
-        recording_url = call_details.get('recordingUrl', 'No recording.')
-        
-        # Customer number check
-        customer = call_details.get('customer', {}).get('number', 'Unknown Number')
-
-        # Create Email
-        subject = f"📞 Vapi Call Finished: {customer}"
-        body = f"""
-        <h2>New Call Report</h2>
-        <p><strong>Caller:</strong> {customer}</p>
-        <p><strong>Summary:</strong> {summary}</p>
-        <hr>
-        <h3>Transcript:</h3>
-        <p>{transcript}</p>
-        <hr>
-        <p><a href="{recording_url}">🎧 Listen to Recording</a></p>
-        """
+        call = data.get('message', data)
+        transcript = call.get('transcript', 'No transcript.')
+        summary = call.get('summary', 'No summary.')
+        recording = call.get('recordingUrl', '#')
+        customer = call.get('customer', {}).get('number', 'Unknown')
 
         msg = MIMEMultipart()
         msg['From'] = EMAIL_SENDER
         msg['To'] = EMAIL_RECEIVER
-        msg['Subject'] = subject
+        msg['Subject'] = f"📞 Call Report: {customer}"
+        
+        body = f"""
+        <h2>New Call Finished</h2>
+        <p><strong>Customer:</strong> {customer}</p>
+        <p><strong>Summary:</strong> {summary}</p>
+        <p><a href="{recording}">🎧 Listen to Recording</a></p>
+        <hr>
+        <h3>Transcript</h3>
+        <p>{transcript}</p>
+        """
         msg.attach(MIMEText(body, 'html'))
 
-        # Send via Gmail SMTP
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(EMAIL_SENDER, EMAIL_PASSWORD)
         server.send_message(msg)
         server.quit()
-        print("✅ Email sent successfully!")
-
     except Exception as e:
-        print(f"❌ Failed to send email: {e}")
+        print(f"Email Error: {e}")
 
 if __name__ == '__main__':
-    # Run locally on port 5000
     app.run(host='0.0.0.0', port=5000)
