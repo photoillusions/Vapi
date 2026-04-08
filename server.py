@@ -15,10 +15,13 @@ app = Flask(__name__)
 EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
 EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
-TEXTBELT_KEY = os.environ.get("TEXTBELT_KEY")
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
+TWILIO_PHONE_NUMBER = os.environ.get("TWILIO_PHONE_NUMBER")  # Your business number in E.164 e.g. +15551234567
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")
 GOOGLE_CALENDAR_ID = os.environ.get("GOOGLE_CALENDAR_ID", "primary")
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "")
+OWNER_PHONE_NUMBER = os.environ.get("OWNER_PHONE_NUMBER", "+18565770236")
 
 CRM_STORE_PATH = os.path.join(os.path.dirname(__file__), "crm_store.json")
 
@@ -30,44 +33,73 @@ SERVICE_LINKS = {
     "portfolio": "photoillusions.us/gallery",
 }
 
+
+
 SYSTEM_PROMPT = """
-# Photo Illusions — AI Booking Concierge
+# Photo Illusions — AI Text-First Concierge
 You are Mary, the AI assistant for Photo Illusions.
 
-## Tone
-- Warm, polished, professional, and conversion-focused.
-- Speak at a measured, unhurried pace — never rush.
-- Ask one question at a time.
-- Guide callers naturally toward booking and deposit.
+## Primary Mission
+Your #1 goal is to direct callers to TEXT the business for all questions, concerns, bookings, and follow-ups.
+Texting is faster, gives customers a written record, and lets the team send links, photos, and confirmations directly.
 
-## Critical rules
+## Tone
+- Warm, friendly, polished, and brief.
+- Speak at a measured, unhurried pace — never rush.
+- Be helpful but keep the call SHORT. Get them to text.
+- Never make the caller feel dismissed — frame texting as the BETTER experience for them.
+
+## Call Flow (follow this every call)
+1) Greet the caller warmly.
+2) Immediately call send_text_intro to send them the business texting number and a welcome text.
+3) Briefly ask what they're calling about so you can acknowledge their need.
+4) For ANY request — booking, pricing, availability, questions, concerns, rescheduling, photo delivery, contracts — direct them to text:
+   - "I just sent you a text message with our direct line. You can text us right now and our team will take care of everything for you."
+5) If they insist on handling it by phone, you MAY assist using the booking/payment tools, but always circle back:
+   - "I'll also text you a confirmation so you have everything in writing."
+6) End the call politely and quickly once they've been directed to text.
+
+## Key Phrases (use naturally, vary them)
+- "The fastest way to get help is to shoot us a text — you'll get a response right away."
+- "I just texted you our direct number. You can text us anytime for bookings, questions, or anything you need."
+- "Texting is the best way to reach us — we can send you links, photos, and confirmations right to your phone."
+- "Go ahead and text us what you're looking for and we'll get you taken care of."
+- "Feel free to text us day or night — we monitor texts closely."
+
+## Handling Specific Requests via Text Redirect
+- **Booking/Scheduling**: "Text us the date you're looking at and the type of session, and we'll check availability and get you locked in."
+- **Pricing/Packages**: "Text us and we'll send over our current packages and pricing right to your phone."
+- **Concerns/Issues**: "I totally understand. Text us the details and our team lead will personally follow up with you."
+- **Photo Delivery**: "Please allow up to 3 business days for delivery. If it's been over 72 hours, text us your email address and we will track your photos down."
+- **Contracts/Links**: Call send_sms_link immediately, then say: "I just sent that right to your phone."
+
+## Critical Rules
 - You already have the caller's phone from caller ID. NEVER ask for phone number.
+- ALWAYS call send_text_intro at the start of every call to text them the business number.
 - If customer asks for links (booking, payment, contract, portfolio), call send_sms_link tool immediately.
 - Never read card numbers aloud.
-- If tool errors occur, say: "I'm having a quick system issue. Let me take your details and our team will follow up right away."
-- If a caller says they did not receive their email, say: "Please allow up to 3 business days for delivery. If it's been over 72 hours, please text your email address to the number on the card and I will follow up and track your photos down."
+- If tool errors occur, say: "I'm having a quick system issue. Just text us and we'll take care of everything."
+- Keep calls under 2 minutes when possible. Be warm but efficient.
 
-## Services
+## Services (reference only if asked)
 - Portrait sessions
 - Event photography coverage
 - Video add-ons
 - On-location + studio options
 
-## Booking flow
+## Fallback Booking Flow (only if caller insists on phone)
 1) Identify service type and requested date/time.
 2) Call check_availability.
 3) If available, collect name and email.
 4) Call book_appointment to pencil in or confirm.
 5) If customer is ready to lock date, collect card fields one at a time and call process_payment.
 6) After successful payment, call send_booking_email.
-
-## Payments
-- Deposit is required to lock date.
-- Use process_payment only when caller is ready.
+7) Always remind them: "You can also text us anytime if you need to make changes."
 
 ## Returning customers
 - Call lookup_customer first after getting their name.
 - If found, personalize with prior context.
+- Still direct them to text for follow-up.
 """
 
 
@@ -199,7 +231,8 @@ def debug():
         {
             "email_sender": mask(EMAIL_SENDER),
             "email_receiver": mask(EMAIL_RECEIVER),
-            "textbelt_key": mask(TEXTBELT_KEY),
+            "twilio_sid": mask(TWILIO_ACCOUNT_SID),
+            "twilio_phone": TWILIO_PHONE_NUMBER or "MISSING",
             "stripe_key": mask(STRIPE_SECRET_KEY),
             "calendar_id": GOOGLE_CALENDAR_ID,
             "service_account": "SET" if os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON") else "MISSING",
@@ -247,12 +280,25 @@ def inbound_call():
 
     response = {
         "assistant": {
-            "firstMessage": "Hello, this is Mary, Photo Illusions AI Assistant. How may I help you today?",
+            "firstMessage": "Hey there! This is Mary with Photo Illusions. I'm going to text you our direct number right now so you can reach us anytime. What can I help you with today?",
             "model": {
                 "provider": "openai",
                 "model": "gpt-5-mini",
                 "messages": [{"role": "system", "content": prompt}],
                 "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "send_text_intro",
+                            "description": "Send the caller an intro SMS with the business texting number. Call this at the start of every call.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {},
+                                "required": [],
+                            },
+                        },
+                        "server": {"url": f"{base}/send-text-intro"},
+                    },
                     {
                         "type": "function",
                         "function": {
@@ -418,6 +464,45 @@ def inbound_call():
         }
     }
     return jsonify(response), 200
+
+
+@app.route("/send-text-intro", methods=["POST"])
+def send_text_intro():
+    data = request.json or {}
+    tool_call_id, _, args = extract_tool_call(data)
+    phone = normalize_phone(get_caller_phone(data))
+
+    if not phone:
+        return tool_result(tool_call_id, "No phone number available from caller ID."), 200
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_PHONE_NUMBER:
+        return tool_result(tool_call_id, "SMS system not configured. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER."), 200
+
+    message_body = (
+        f"Hey! Thanks for calling Photo Illusions 📸\n\n"
+        f"You can text THIS number anytime for:\n"
+        f"✅ Booking & scheduling\n"
+        f"✅ Pricing & packages\n"
+        f"✅ Questions or concerns\n"
+        f"✅ Photo delivery status\n\n"
+        f"Just reply to this text anytime!\n\n"
+        f"We reply fast! 💬\n"
+        f"— Photo Illusions Team\n"
+        f"photoillusions.us"
+    )
+
+    try:
+        from twilio.rest import Client
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        msg = client.messages.create(
+            body=message_body,
+            from_=TWILIO_PHONE_NUMBER,
+            to=phone,
+        )
+        if msg.sid:
+            return tool_result(tool_call_id, "Intro text sent successfully from your business number."), 200
+        return tool_result(tool_call_id, "SMS send returned no confirmation."), 200
+    except Exception as e:
+        return tool_result(tool_call_id, f"SMS error: {str(e)}"), 200
 
 
 @app.route("/lookup-customer-tool", methods=["POST"])
@@ -680,25 +765,22 @@ def send_sms_tool():
 
     if not phone:
         return tool_result(tool_call_id, "No phone number available from caller ID."), 200
-    if not TEXTBELT_KEY:
-        return tool_result(tool_call_id, "SMS system not configured. Add TEXTBELT_KEY."), 200
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_PHONE_NUMBER:
+        return tool_result(tool_call_id, "SMS system not configured. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER."), 200
 
     message_body = f"Photo Illusions: Here is your {req_type} link: {link}"
 
     try:
-        resp = requests.post(
-            "https://textbelt.com/text",
-            {
-                "phone": phone,
-                "message": message_body,
-                "key": TEXTBELT_KEY,
-            },
-            timeout=20,
+        from twilio.rest import Client
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        msg = client.messages.create(
+            body=message_body,
+            from_=TWILIO_PHONE_NUMBER,
+            to=phone,
         )
-        payload = resp.json()
-        if payload.get("success"):
+        if msg.sid:
             return tool_result(tool_call_id, "SMS sent successfully."), 200
-        return tool_result(tool_call_id, f"SMS failed: {payload.get('error', 'unknown error')}"), 200
+        return tool_result(tool_call_id, "SMS send returned no confirmation."), 200
     except Exception as e:
         return tool_result(tool_call_id, f"SMS error: {str(e)}"), 200
 
@@ -716,6 +798,63 @@ def webhook():
         except Exception:
             print(f"Webhook report error: {traceback.format_exc()}")
     return jsonify({"status": "OK"}), 200
+
+
+@app.route("/incoming-sms", methods=["POST"])
+def incoming_sms():
+    """Handle incoming SMS replies from customers and forward to business email."""
+    from_number = request.form.get("From", "Unknown")
+    body = request.form.get("Body", "")
+    to_number = request.form.get("To", "")
+
+    # Look up customer in CRM
+    normalized = normalize_phone(from_number)
+    crm = load_crm()
+    customer = crm.get(normalized, {})
+    customer_name = customer.get("name", "Unknown Customer")
+
+    subject = f"Text from {customer_name} ({from_number})"
+    email_body = (
+        f"Incoming text message to Photo Illusions\n"
+        f"{'='*40}\n\n"
+        f"From: {customer_name}\n"
+        f"Phone: {from_number}\n"
+        f"To: {to_number}\n"
+        f"Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+        f"Message:\n{body}\n\n"
+        f"{'='*40}\n"
+        f"Reply to this customer by texting {from_number} from your Twilio console\n"
+        f"or go to: https://console.twilio.com/us1/develop/sms/try-it-out/send-an-sms"
+    )
+
+    try:
+        if EMAIL_RECEIVER:
+            send_email(EMAIL_RECEIVER, subject, email_body)
+    except Exception:
+        print(f"Incoming SMS email forward error: {traceback.format_exc()}")
+
+    # Forward to owner's cell phone via SMS
+    try:
+        if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER and OWNER_PHONE_NUMBER:
+            from twilio.rest import Client
+            client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+            forward_msg = f"📩 Text from {customer_name} ({from_number}):\n\n{body}"
+            client.messages.create(
+                body=forward_msg,
+                from_=TWILIO_PHONE_NUMBER,
+                to=OWNER_PHONE_NUMBER,
+            )
+    except Exception:
+        print(f"Incoming SMS phone forward error: {traceback.format_exc()}")
+
+    # Auto-reply acknowledging receipt
+    twiml_response = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        "<Response>"
+        "<Message>Thanks for texting Photo Illusions! We got your message and will reply shortly. 📸</Message>"
+        "</Response>"
+    )
+    return twiml_response, 200, {"Content-Type": "text/xml"}
 
 
 if __name__ == "__main__":
