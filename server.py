@@ -22,6 +22,7 @@ STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")
 GOOGLE_CALENDAR_ID = os.environ.get("GOOGLE_CALENDAR_ID", "primary")
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "")
 OWNER_PHONE_NUMBER = os.environ.get("OWNER_PHONE_NUMBER", "+18565770236")
+VAPI_PRIVATE_KEY = os.environ.get("VAPI_PRIVATE_KEY", "")
 
 CRM_STORE_PATH = os.path.join(os.path.dirname(__file__), "crm_store.json")
 
@@ -36,70 +37,78 @@ SERVICE_LINKS = {
 
 
 SYSTEM_PROMPT = """
-# Photo Illusions — AI Text-First Concierge
-You are Mary, the AI assistant for Photo Illusions.
+# Photo Illusions — AI Booking Concierge
+You are Mary, the AI assistant for Photo Illusions. You are NOT a human — never claim to be one.
 
-## Primary Mission
-Your #1 goal is to direct callers to TEXT the business for all questions, concerns, bookings, and follow-ups.
-Texting is faster, gives customers a written record, and lets the team send links, photos, and confirmations directly.
+## Identity Rules (CRITICAL)
+- You ARE an AI assistant. If asked "are you real?" say: "I'm Photo Illusions' AI assistant, Mary. I'm here to help, and I'll make sure a real person follows up with you."
+- NEVER say "I'm real" or "I'm a human" or imply you are a person.
+- NEVER contradict yourself. If you don't know something, say so.
+- If someone asks personal questions (married, age, etc.), say: "I'm just an AI, but I'm great at getting you connected with our team!"
 
-## Tone
-- Warm, friendly, polished, and brief.
-- Speak at a measured, unhurried pace — never rush.
-- Be helpful but keep the call SHORT. Get them to text.
-- Never make the caller feel dismissed — frame texting as the BETTER experience for them.
+## Tone & Style
+- Warm, friendly, polished, and BRIEF.
+- Keep responses to 1-2 sentences. Do NOT give long lists of questions.
+- Listen to what the caller actually wants. If they want a callback, arrange the callback. Don't interrogate them.
+- When a caller is trying to end the call ("thank you," "alright," "have a good day"), wrap up IMMEDIATELY. Do not ask more questions.
 
-## Call Flow (follow this every call)
-1) Greet the caller warmly.
-2) Immediately call send_text_intro to send them the business texting number and a welcome text.
-3) Briefly ask what they're calling about so you can acknowledge their need.
-4) For ANY request — booking, pricing, availability, questions, concerns, rescheduling, photo delivery, contracts — direct them to text:
-   - "I just sent you a text message with our direct line. You can text us right now and our team will take care of everything for you."
-5) If they insist on handling it by phone, you MAY assist using the booking/payment tools, but always circle back:
-   - "I'll also text you a confirmation so you have everything in writing."
-6) End the call politely and quickly once they've been directed to text.
+## Priority #1: Recognize What the Caller Wants
+Before anything else, figure out which category this caller falls into:
 
-## Key Phrases (use naturally, vary them)
-- "The fastest way to get help is to shoot us a text — you'll get a response right away."
-- "I just texted you our direct number. You can text us anytime for bookings, questions, or anything you need."
-- "Texting is the best way to reach us — we can send you links, photos, and confirmations right to your phone."
-- "Go ahead and text us what you're looking for and we'll get you taken care of."
-- "Feel free to text us day or night — we monitor texts closely."
+### A) CALLBACK REQUEST (most common) — caller wants a human to call them back
+- Recognize phrases like: "have someone call me," "call me back," "I want to talk to [name]," "please call me"
+- Immediately call request_callback with their name (if given), who they want to speak to, and any message.
+- Confirm briefly: "Done — I've notified the team and someone will call you back shortly."
+- End the call. Do NOT ask extra questions about service type, dates, email, etc.
 
-## Handling Specific Requests via Text Redirect
-- **Booking/Scheduling**: "Text us the date you're looking at and the type of session, and we'll check availability and get you locked in."
-- **Pricing/Packages**: "Text us and we'll send over our current packages and pricing right to your phone."
-- **Concerns/Issues**: "I totally understand. Text us the details and our team lead will personally follow up with you."
-- **Photo Delivery**: "Please allow up to 3 business days for delivery. If it's been over 72 hours, text us your email address and we will track your photos down."
-- **Contracts/Links**: Call send_sms_link immediately, then say: "I just sent that right to your phone."
+### B) TRANSFER REQUEST — caller wants to speak to a live person RIGHT NOW
+- Recognize phrases like: "transfer me," "speak to a representative," "talk to a real person," "let me speak to someone"
+- Say: "Absolutely, let me get you connected." Then call transfer_to_human.
+- Do NOT try to handle it yourself or upsell your own capabilities.
+
+### C) FRUSTRATED / REPEAT CALLER — caller is upset, says they called before with no response
+- Apologize sincerely and briefly: "I'm really sorry about that."
+- Immediately call request_callback with urgency marked as "high" and include context about the prior missed callback.
+- Confirm: "I've flagged this as urgent and someone will reach out to you very soon."
+- Do NOT make excuses. Do NOT push them to text.
+
+### D) SIMPLE MESSAGE — caller wants to leave a message for someone (e.g., "tell Tony to call Reese")
+- Take the message. Call request_callback with the details.
+- Confirm briefly: "Got it — I'll make sure that message gets to [name] right away."
+- End the call.
+
+### E) BOOKING / SERVICE INQUIRY — caller actually wants to book or ask about services
+- ONLY for this category, proceed with the booking flow below.
+- Call send_text_intro to text them the business number.
+- Keep it conversational — ask ONE question at a time, not a list of 4.
+
+## Booking Flow (only for category E callers)
+1) Ask what type of session they're looking for.
+2) Ask for their preferred date/time.
+3) Call check_availability.
+4) If available, collect name and email.
+5) Call book_appointment.
+6) If paying now, collect card info one field at a time → call process_payment.
+7) Call send_booking_email.
+8) Mention: "You can also text us anytime if you need to make changes."
 
 ## Critical Rules
-- You already have the caller's phone from caller ID. NEVER ask for phone number.
-- ALWAYS call send_text_intro at the start of every call to text them the business number.
-- If customer asks for links (booking, payment, contract, portfolio), call send_sms_link tool immediately.
+- You already have the caller's phone from caller ID. NEVER ask for their phone number.
+- Keep calls SHORT. Most calls should be under 90 seconds.
+- ONE question at a time. Never dump 3-4 questions in one response.
+- When the caller signals they want to end the call, say goodbye immediately.
+- If a tool errors, say: "I'm having a quick system issue, but I've noted your request and someone will follow up."
 - Never read card numbers aloud.
-- If tool errors occur, say: "I'm having a quick system issue. Just text us and we'll take care of everything."
-- Keep calls under 2 minutes when possible. Be warm but efficient.
+- If customer asks for links (booking, payment, contract, portfolio), call send_sms_link immediately.
 
 ## Services (reference only if asked)
-- Portrait sessions
-- Event photography coverage
-- Video add-ons
+- Portrait sessions, event photography, video add-ons
 - On-location + studio options
-
-## Fallback Booking Flow (only if caller insists on phone)
-1) Identify service type and requested date/time.
-2) Call check_availability.
-3) If available, collect name and email.
-4) Call book_appointment to pencil in or confirm.
-5) If customer is ready to lock date, collect card fields one at a time and call process_payment.
-6) After successful payment, call send_booking_email.
-7) Always remind them: "You can also text us anytime if you need to make changes."
+- Digital Entertainment packages ($150 / $250)
 
 ## Returning customers
-- Call lookup_customer first after getting their name.
+- Call lookup_customer after getting their name.
 - If found, personalize with prior context.
-- Still direct them to text for follow-up.
 """
 
 
@@ -280,7 +289,7 @@ def inbound_call():
 
     response = {
         "assistant": {
-            "firstMessage": "Hey there! This is Mary with Photo Illusions. I'm going to text you our direct number right now so you can reach us anytime. What can I help you with today?",
+            "firstMessage": "Hello! This is Mary, Photo Illusions' AI assistant. How can I help you today?",
             "model": {
                 "provider": "openai",
                 "model": "gpt-5-mini",
@@ -444,6 +453,37 @@ def inbound_call():
                             },
                         },
                         "server": {"url": f"{base}/send-sms"},
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "request_callback",
+                            "description": "Log a callback request and notify the Photo Illusions team via email. Use this whenever a caller wants someone to call them back, wants to leave a message, or is a repeat caller who was missed.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "caller_name": {"type": "string", "description": "Caller's name if provided"},
+                                    "message": {"type": "string", "description": "The message or request details"},
+                                    "requested_staff": {"type": "string", "description": "Specific staff member requested (e.g. Tony, Debbie, Kirk)"},
+                                    "urgency": {"type": "string", "enum": ["normal", "high"], "description": "Set to high if caller is frustrated or says they called before with no response"},
+                                },
+                                "required": ["message"],
+                            },
+                        },
+                        "server": {"url": f"{base}/request-callback"},
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "transfer_to_human",
+                            "description": "Transfer the caller to a live representative. Use when the caller explicitly asks to speak to a real person or be transferred.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {},
+                                "required": [],
+                            },
+                        },
+                        "server": {"url": f"{base}/transfer-to-human"},
                     },
                 ],
             },
@@ -785,6 +825,90 @@ def send_sms_tool():
         return tool_result(tool_call_id, f"SMS error: {str(e)}"), 200
 
 
+@app.route("/request-callback", methods=["POST"])
+def request_callback():
+    data = request.json or {}
+    tool_call_id, _, args = extract_tool_call(data)
+    caller_phone = get_caller_phone(data)
+
+    caller_name = args.get("caller_name", "Unknown caller")
+    message = args.get("message", "Callback requested")
+    requested_staff = args.get("requested_staff", "Any available")
+    urgency = args.get("urgency", "normal")
+
+    urgency_label = "🔴 URGENT" if urgency == "high" else "📞 Normal"
+
+    subject = f"{urgency_label} Callback Request — {caller_name}"
+    body = (
+        f"Callback Request\n"
+        f"{'=' * 40}\n"
+        f"Urgency: {urgency_label}\n"
+        f"Caller: {caller_name}\n"
+        f"Phone: {caller_phone or 'Unknown'}\n"
+        f"Requested Staff: {requested_staff}\n"
+        f"Message: {message}\n"
+        f"Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n"
+        f"{'=' * 40}\n"
+        f"Please call back as soon as possible."
+    )
+
+    sent = False
+    try:
+        if EMAIL_RECEIVER:
+            sent = send_email(EMAIL_RECEIVER, subject, body)
+    except Exception:
+        pass
+
+    # Also try SMS to owner
+    try:
+        if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER and OWNER_PHONE_NUMBER:
+            from twilio.rest import Client
+            client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+            sms_body = f"{urgency_label} callback: {caller_name} ({caller_phone}) wants {requested_staff} to call back. Msg: {message}"
+            client.messages.create(body=sms_body, from_=TWILIO_PHONE_NUMBER, to=OWNER_PHONE_NUMBER)
+    except Exception:
+        pass
+
+    if sent:
+        return tool_result(tool_call_id, f"Callback request sent to the team. {caller_name} will receive a call back."), 200
+    return tool_result(tool_call_id, "Callback request noted. The team will be notified."), 200
+
+
+@app.route("/transfer-to-human", methods=["POST"])
+def transfer_to_human():
+    data = request.json or {}
+    tool_call_id, _, args = extract_tool_call(data)
+    caller_phone = get_caller_phone(data)
+
+    # Notify the team that a transfer was requested
+    try:
+        if EMAIL_RECEIVER:
+            send_email(
+                EMAIL_RECEIVER,
+                f"🔁 Live Transfer Requested — {caller_phone}",
+                f"A caller ({caller_phone}) requested to speak with a live representative.\n"
+                f"Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n"
+                f"Please call them back immediately."
+            )
+    except Exception:
+        pass
+
+    # Try SMS to owner for immediate attention
+    try:
+        if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER and OWNER_PHONE_NUMBER:
+            from twilio.rest import Client
+            client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+            client.messages.create(
+                body=f"🔁 Live transfer requested by {caller_phone}. Please call them now.",
+                from_=TWILIO_PHONE_NUMBER,
+                to=OWNER_PHONE_NUMBER,
+            )
+    except Exception:
+        pass
+
+    return tool_result(tool_call_id, "Transfer request sent. Tell the caller someone will be with them shortly or will call right back."), 200
+
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.json or {}
@@ -798,6 +922,48 @@ def webhook():
         except Exception:
             print(f"Webhook report error: {traceback.format_exc()}")
     return jsonify({"status": "OK"}), 200
+
+
+@app.route("/call-logs", methods=["GET"])
+def call_logs():
+    """Pull recent call logs from Vapi API. Optional query params: ?limit=20&days=7"""
+    if not VAPI_PRIVATE_KEY:
+        return jsonify({"error": "VAPI_PRIVATE_KEY not configured"}), 500
+
+    limit = request.args.get("limit", "50", type=str)
+    days = request.args.get("days", "7", type=str)
+
+    try:
+        from datetime import timedelta
+        cutoff = (datetime.utcnow() - timedelta(days=int(days))).isoformat() + "Z"
+
+        headers = {"Authorization": f"Bearer {VAPI_PRIVATE_KEY}"}
+        params = {"limit": limit, "createdAtGe": cutoff}
+        resp = requests.get("https://api.vapi.ai/call", headers=headers, params=params, timeout=15)
+
+        if resp.status_code != 200:
+            return jsonify({"error": f"Vapi API returned {resp.status_code}", "detail": resp.text}), resp.status_code
+
+        calls = resp.json()
+        # Summarize each call
+        summary = []
+        for c in calls:
+            summary.append({
+                "id": c.get("id"),
+                "created": c.get("createdAt"),
+                "ended": c.get("endedAt"),
+                "duration_sec": c.get("costs", [{}])[0].get("minutes", 0) * 60 if c.get("costs") else None,
+                "status": c.get("status"),
+                "ended_reason": c.get("endedReason"),
+                "customer_phone": c.get("customer", {}).get("number"),
+                "transcript": c.get("transcript"),
+                "summary": c.get("summary"),
+                "messages": c.get("messages"),
+            })
+
+        return jsonify({"count": len(summary), "calls": summary}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/incoming-sms", methods=["POST"])
