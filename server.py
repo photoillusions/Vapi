@@ -34,6 +34,21 @@ SERVICE_LINKS = {
     "portfolio": "photoillusions.us/gallery",
 }
 
+# Public URL of the registration / payment form. Mary texts a prefilled
+# version of this link to the caller at the end of a booking conversation.
+REGISTRATION_FORM_URL = os.environ.get(
+    "REGISTRATION_FORM_URL",
+    "https://photo-illusions-customer-registration.onrender.com/Form.html",
+)
+
+# Map Mary's spoken package names -> form's data-pkg values + default amount.
+PACKAGE_MAP = {
+    "ai_edit_images":            {"key": "ai-edit-images",            "amount": 50},
+    "digital_entertainment_150": {"key": "digital-entertainment-150", "amount": 150},
+    "ai_digital_entertainment":  {"key": "digital-entertainment",     "amount": 250},
+    "custom":                    {"key": "custom",                    "amount": 0},
+}
+
 
 
 SYSTEM_PROMPT = """
@@ -132,10 +147,12 @@ One question at a time. Wait for the answer before the next.
 6. "Last thing — what city or venue are you thinking?"
 
 → Silently call **check_availability** with the date.
-→ If available: call **book_appointment** → read back date + name to confirm → call **send_booking_email** → "You're booked. Anything else?" → **endCall** when done.
+→ If available: call **book_appointment** → read back date + name to confirm → call **send_booking_email** → call **send_registration_link** with mode="new" and ALL collected fields (name, email, phone, event_title, date, start, end, guests, venue, package if mentioned) → say: "Perfect — I just texted you a link with all your details prefilled. Tap it, double-check everything, and pay your deposit to lock in the date. Anything else?" → **endCall** when done.
 → If unavailable: "That date isn't open yet — can I check one nearby?" → offer ONE alternative → if no match, call **request_callback** → "Our team will reach out with available dates." → **endCall**.
 
 Do NOT ask about deposit, props, backdrop, add-ons unless the caller asks first.
+Do NOT try to take a credit card over the phone — the texted link handles payment.
+If the caller is a returning customer paying a balance: call **send_registration_link** with mode="returning", their email, and the amount → say: "I just texted you a secure payment link. Tap it and you're all set."
 If you mishear an email twice during booking, stop — call **request_callback** and continue with the booking using your best guess; a human will confirm by text.
 
 ## After-Hours Awareness
@@ -501,6 +518,39 @@ def inbound_call():
                             },
                         },
                         "server": {"url": f"{base}/send-sms"},
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "send_registration_link",
+                            "description": (
+                                "Text the caller a PREFILLED registration / payment link with all the booking "
+                                "details collected during the call. Use this at the END of a successful booking "
+                                "conversation so the caller can review the details and pay the deposit. "
+                                "For returning customers paying a balance, set mode='returning' and pass amount."
+                            ),
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "mode": {"type": "string", "enum": ["new", "returning"], "description": "new = first-time booking, returning = balance/additional payment"},
+                                    "package": {"type": "string", "enum": ["ai_edit_images", "digital_entertainment_150", "ai_digital_entertainment", "custom"], "description": "Which package the caller chose"},
+                                    "amount": {"type": "number", "description": "Deposit or balance amount in dollars"},
+                                    "name": {"type": "string"},
+                                    "phone": {"type": "string", "description": "Optional override; defaults to caller ID"},
+                                    "email": {"type": "string"},
+                                    "event_title": {"type": "string", "description": "e.g. Birthday Party, Wedding"},
+                                    "date": {"type": "string", "description": "Event date YYYY-MM-DD or natural like 'June 15 2026'"},
+                                    "start": {"type": "string", "description": "Start time, e.g. '6pm' or '18:00'"},
+                                    "end": {"type": "string", "description": "End time, e.g. '10pm' or '22:00'"},
+                                    "guests": {"type": "number"},
+                                    "venue": {"type": "string", "description": "Venue name"},
+                                    "address": {"type": "string", "description": "Venue address"},
+                                    "notes": {"type": "string"},
+                                },
+                                "required": ["mode"],
+                            },
+                        },
+                        "server": {"url": f"{base}/send-registration-link"},
                     },
                     {
                         "type": "function",
@@ -887,6 +937,85 @@ def send_sms_tool():
         )
         if msg.sid:
             return tool_result(tool_call_id, "SMS sent successfully."), 200
+        return tool_result(tool_call_id, "SMS send returned no confirmation."), 200
+    except Exception as e:
+        return tool_result(tool_call_id, f"SMS error: {str(e)}"), 200
+
+
+@app.route("/send-registration-link", methods=["POST"])
+def send_registration_link_tool():
+    """Build a prefilled registration form URL from the booking details Mary
+    collected on the call, then SMS it to the caller."""
+    from urllib.parse import urlencode
+
+    data = request.json or {}
+    tool_call_id, _, args = extract_tool_call(data)
+    phone = normalize_phone(args.get("phone") or get_caller_phone(data) or "")
+
+    mode = str(args.get("mode", "new")).lower()
+    if mode not in ("new", "returning"):
+        mode = "new"
+
+    params = {"mode": mode}
+
+    # Common fields
+    for src, dst in [("name", "name"), ("email", "email"), ("phone", "phone")]:
+        v = args.get(src)
+        if v:
+            params[dst] = str(v).strip()
+
+    if mode == "new":
+        # Map package -> data-pkg key + default amount fallback
+        pkg = args.get("package")
+        amount = args.get("amount")
+        if pkg and pkg in PACKAGE_MAP:
+            params["package"] = PACKAGE_MAP[pkg]["key"]
+            if not amount:
+                amount = PACKAGE_MAP[pkg]["amount"]
+        if amount:
+            params["amount"] = amount
+
+        for src, dst in [
+            ("event_title", "event_title"),
+            ("date", "date"),
+            ("start", "start"),
+            ("end", "end"),
+            ("guests", "guests"),
+            ("venue", "venue"),
+            ("address", "address"),
+            ("notes", "notes"),
+        ]:
+            v = args.get(src)
+            if v not in (None, ""):
+                params[dst] = v
+    else:  # returning
+        amount = args.get("amount")
+        if amount:
+            params["amount"] = amount
+        if args.get("notes"):
+            params["description"] = args.get("notes")
+
+    url = f"{REGISTRATION_FORM_URL}?{urlencode(params)}"
+
+    if not phone:
+        return tool_result(tool_call_id, f"No phone number available to text the link. Link is: {url}"), 200
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_PHONE_NUMBER:
+        return tool_result(tool_call_id, "SMS system not configured."), 200
+
+    if mode == "returning":
+        body = f"Photo Illusions: Here's your secure payment link with your details prefilled — {url}"
+    else:
+        body = (
+            "Photo Illusions: Thanks for calling! Here's your booking — please review the "
+            f"details and pay your deposit to lock in the date: {url}"
+        )
+
+    try:
+        from twilio.rest import Client
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        msg = client.messages.create(body=body, from_=TWILIO_PHONE_NUMBER, to=phone)
+        if msg.sid:
+            return tool_result(tool_call_id, "Registration link texted to caller."), 200
         return tool_result(tool_call_id, "SMS send returned no confirmation."), 200
     except Exception as e:
         return tool_result(tool_call_id, f"SMS error: {str(e)}"), 200
