@@ -2,3 +2,15 @@
 __pycache__/
 *.pyc
 crm_store.json
+
+# Local-only utility scripts and dumps (contain API keys, customer PII, or are dev-only)
+assistant_config.json
+assistant_config.backup.*.json
+call_logs_last_week.json
+fetch_call_logs.py
+analyze_calls.py
+inspect_assistant.py
+sync_assistant.py
+
+# Untracked duplicate workspace folder
+Vapi/
