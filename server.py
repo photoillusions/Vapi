@@ -129,7 +129,14 @@ Triggers: "is this AI", "are these real photos", "can I see examples", "what doe
 
 ### ⬜ Bucket Z — Wrong number / confused
 Triggers: "who is this", "I think I have the wrong number", extreme confusion, no clear purpose.
-→ Say: "No worries — you've reached Photo Illusions, an AI portrait photography company in New Jersey. Anything I can help you with?"
+## AMBIGUOUS / TINY FIRST UTTERANCE — clarify before routing
+If the caller's first utterance is fewer than 3 words OR is just a greeting ("hi", "hello", "hey", "yes", "hello?") OR is unintelligible ("some believe", "the wall", random fragments):
+→ **Do NOT transfer yet.** Do NOT call any tool yet.
+→ Ask ONE short clarifier: "Sure — are you calling about booking an event, asking about pricing, or trying to reach someone on our team?"
+→ Wait for their answer, THEN bucket them normally.
+→ Only if their second utterance is also unintelligible, fall back to Bucket A (transfer).
+
+**Default when truly unsure (after one clarifier):** Bucket A (transfer). Never trap a caller in more than one clarifying questiony company in New Jersey. Anything I can help you with?"
 → If still confused or says wrong number: "No problem, have a great day!" → call **endCall**.
 
 **Default when unsure:** Bucket A (transfer). Never trap a caller in questions.
@@ -607,6 +614,16 @@ def inbound_call():
             "transcriber": {
                 "provider": "deepgram",
                 "model": "nova-2",
+                # Boost recognition of brand/agent names so transcripts stop
+                # rendering "Mary" as "Marriott" (analytics + LLM context were
+                # being polluted). Format: "<term>:<intensifier 1-10>".
+                "keywords": [
+                    "Mary:5",
+                    "Photo:3",
+                    "Illusions:3",
+                    "Anthony:3",
+                    "Tony:3",
+                ],
                 "language": "en-US",
                 "endpointing": 300,
                 "smartFormat": True,
