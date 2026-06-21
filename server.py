@@ -1185,6 +1185,11 @@ def incoming_sms():
     from_number = request.form.get("From", "Unknown")
     body = request.form.get("Body", "")
     to_number = request.form.get("To", "")
+    # If the text contains an email tied to a photo order, resend on the spot.
+    photo_reply = _photo_resend_from_sms(body)
+    if photo_reply:
+        twiml = '<?xml version="1.0" encoding="UTF-8"?><Response><Message>%s</Message></Response>' % photo_reply
+        return twiml, 200, {"Content-Type": "text/xml"}
 
     # Look up customer in CRM
     normalized = normalize_phone(from_number)
@@ -1441,3 +1446,38 @@ def photo_resend_tool():
             "Done -- I just emailed your %d photos to %s. Please allow a couple of minutes for it to arrive." % (len(photos), send_to))
     return tool_result(tool_call_id,
         "I had trouble sending just now, so I'll have the team resend your photos to %s shortly." % send_to)
+
+
+def _photo_resend_from_sms(body):
+    """If an inbound SMS contains an email tied to a photo order, resend the
+    photos to the ON-FILE email and return a confirmation line for the auto-reply.
+    Returns None if there's no email / no match / no photos, so the normal SMS
+    flow continues. Photos are only ever sent to the email on file -- never to an
+    arbitrary address from the text -- so this is safe."""
+    text = body or ""
+    m = re.search(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", text)
+    candidate = m.group(0) if m else _spoken_to_email(text)
+    if "@" not in candidate:
+        return None
+    drive = get_drive_service()
+    if not drive:
+        return None
+    folder, _score, matched = find_folder_by_email(drive, candidate)
+    if not folder:
+        return None
+    photos = count_photos(drive, folder["id"])
+    if not photos:
+        return None
+    link = folder.get("webViewLink", "")
+    email_body = (
+        "Hi,\n\nHere are your photos. View and download them here:\n%s\n\n"
+        "(%d photos)\n\nIf you have any trouble opening them, just reply to this email.\n\n"
+        "Thank you,\nPhoto Illusions"
+    ) % (link, len(photos))
+    if not send_email(matched, "Your Photo Illusions photos", email_body):
+        return None
+    if EMAIL_RECEIVER:
+        send_email(EMAIL_RECEIVER, "Photo resend (via text)",
+                   "A text matched the order for %s; sent %d photos." % (matched, len(photos)))
+    return ("Sent! We just emailed your %d photos to %s. "
+            "Please allow a couple of minutes for it to arrive." % (len(photos), matched))
