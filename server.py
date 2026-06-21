@@ -1526,6 +1526,7 @@ def sms_inbound():
     payload = data.get("payload", {}) or {}
     sender = payload.get("sender") or payload.get("phoneNumber")
     message = payload.get("message", "")
+    _relay_inbound_text(sender, message)
     reply = _photo_resend_from_sms(message)
     if reply and sender:
         smsgate_send(sender, reply)
@@ -1593,3 +1594,28 @@ _sys.modules["twilio.rest"] = _tw_rest
 TWILIO_ACCOUNT_SID = TWILIO_ACCOUNT_SID or "smsgate"
 TWILIO_AUTH_TOKEN = TWILIO_AUTH_TOKEN or "smsgate"
 TWILIO_PHONE_NUMBER = TWILIO_PHONE_NUMBER or "+10000000000"
+
+
+def _relay_inbound_text(sender, message):
+    """Copy an incoming customer text to Tony: live push to Telegram (if
+    TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID are set) AND an emailed copy to
+    EMAIL_RECEIVER (Hermes reads these via the gmail-search skill, subject
+    'Text from ...'). Best-effort; never blocks the webhook."""
+    sender = sender or "unknown"
+    tok = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat = os.environ.get("TELEGRAM_CHAT_ID")
+    if tok and chat:
+        try:
+            requests.post(
+                "https://api.telegram.org/bot%s/sendMessage" % tok,
+                json={"chat_id": chat, "text": "New text from %s:\n\n%s" % (sender, message)},
+                timeout=10,
+            )
+        except Exception:
+            traceback.print_exc()
+    if EMAIL_RECEIVER:
+        try:
+            send_email(EMAIL_RECEIVER, "Text from %s" % sender,
+                       "From: %s\n\n%s" % (sender, message))
+        except Exception:
+            traceback.print_exc()
