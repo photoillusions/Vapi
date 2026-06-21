@@ -1552,3 +1552,44 @@ def register_sms_webhook():
                         "registered_url": hook, "response": r.text[:500]}), 200
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# =============================================================================
+# CANCEL TWILIO: route every existing `twilio` SMS send through SMSGate.
+# All Twilio usage is `from twilio.rest import Client; client.messages.create(
+# body=, from_=, to=)`. We register a fake `twilio` module so those calls go to
+# smsgate_send(), and keep the TWILIO_* guards passing with dummy values so the
+# real Twilio account and its credentials can be deleted. No other code changes.
+# =============================================================================
+import sys as _sys
+import types as _types
+
+
+class _SGMsg:
+    def __init__(self, sid):
+        self.sid = sid
+
+
+class _SGMessages:
+    def create(self, body=None, from_=None, to=None, **kwargs):
+        ok = smsgate_send(to, body)
+        return _SGMsg("smsgate" if ok else "")
+
+
+class _SGClient:
+    def __init__(self, *args, **kwargs):
+        self.messages = _SGMessages()
+
+
+_tw_mod = _types.ModuleType("twilio")
+_tw_rest = _types.ModuleType("twilio.rest")
+_tw_rest.Client = _SGClient
+_tw_mod.rest = _tw_rest
+_sys.modules["twilio"] = _tw_mod
+_sys.modules["twilio.rest"] = _tw_rest
+
+# Keep the existing `if TWILIO_ACCOUNT_SID and ...` guards passing so the shim
+# runs even after the real Twilio secrets are removed from the environment.
+TWILIO_ACCOUNT_SID = TWILIO_ACCOUNT_SID or "smsgate"
+TWILIO_AUTH_TOKEN = TWILIO_AUTH_TOKEN or "smsgate"
+TWILIO_PHONE_NUMBER = TWILIO_PHONE_NUMBER or "+10000000000"
