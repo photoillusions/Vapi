@@ -1241,12 +1241,14 @@ if __name__ == "__main__":
 
 
 # =============================================================================
-# PHOTO TOOLS  (lookupPhotos + resendPhotos)
-# Caller-ID -> find the customer's event-photo folder in Drive, confirm photos
-# are there, and (on confirm) email the folder link. Folders are named
-# <email>{<phone>}. Uses the same service account as Calendar; the Events
-# folder must be shared with the service account's client_email (Viewer).
+# PHOTO TOOLS  (lookupPhotos + resendPhotos)  -- v2 with liberal email matching
+# Find a customer's event-photo folder by caller-ID, a spoken phone number, or
+# a spoken (TTS-mangled) email, confirm photos exist, and email the link.
+# Folders are named <email>{<phone>}. Uses the Calendar service account; the
+# Events folder must be shared with its client_email (Viewer).
 # =============================================================================
+import re
+import difflib
 
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
@@ -1275,6 +1277,44 @@ def _only_digits(s):
     return "".join(ch for ch in str(s or "") if ch.isdigit())
 
 
+def _alnum(s):
+    return "".join(ch for ch in str(s or "").lower() if ch.isalnum())
+
+
+def _email_from_folder(name):
+    return name.split("{")[0].strip()
+
+
+def _spoken_to_email(s):
+    """Turn a spoken / STT-mangled email into a best-guess address.
+    Handles 'name at gmail dot com', 'underscore', 'dash', stray spaces, case."""
+    s = (s or "").strip().lower()
+    s = re.sub(r"\s+at\s+", "@", s)
+    s = re.sub(r"\s*\bdot\b\s*", ".", s)
+    s = re.sub(r"\s*\bperiod\b\s*", ".", s)
+    s = re.sub(r"\s*\bunderscore\b\s*", "_", s)
+    s = re.sub(r"\s*\b(dash|hyphen|minus)\b\s*", "-", s)
+    s = re.sub(r"\s*\bplus\b\s*", "+", s)
+    s = s.replace(" ", "")
+    return s.strip(".")
+
+
+def _all_email_folders(drive):
+    out, token = [], None
+    while True:
+        res = drive.files().list(
+            q=("mimeType='application/vnd.google-apps.folder' and trashed=false "
+               "and name contains '@'"),
+            fields="nextPageToken, files(id,name,webViewLink)", pageSize=200,
+            pageToken=token, supportsAllDrives=True, includeItemsFromAllDrives=True,
+        ).execute()
+        out.extend(res.get("files", []))
+        token = res.get("nextPageToken")
+        if not token:
+            break
+    return out
+
+
 def find_photo_folder(drive, phone):
     digits = _only_digits(phone)
     if len(digits) < 10:
@@ -1292,6 +1332,35 @@ def find_photo_folder(drive, phone):
     return None
 
 
+def find_folder_by_email(drive, spoken_email):
+    """TTS-tolerant email match. Returns (folder, score, matched_email)."""
+    guess = _spoken_to_email(spoken_email)
+    g_sig = _alnum(guess)
+    g_local = _alnum(guess.split("@")[0]) if "@" in guess else g_sig
+    if len(g_sig) < 3:
+        return None, 0.0, None
+    best, best_score, best_email = None, 0.0, None
+    for f in _all_email_folders(drive):
+        femail = _email_from_folder(f["name"])
+        f_sig = _alnum(femail)
+        f_local = _alnum(femail.split("@")[0])
+        if f_sig == g_sig:
+            return f, 1.0, femail
+        score = difflib.SequenceMatcher(None, g_sig, f_sig).ratio()
+        if g_local and f_local:
+            if g_local == f_local:
+                score = max(score, 0.97)
+            else:
+                score = max(score, difflib.SequenceMatcher(None, g_local, f_local).ratio())
+                if sorted(g_local) == sorted(f_local):   # tolerate first/last swap
+                    score = max(score, 0.9)
+        if score > best_score:
+            best, best_score, best_email = f, score, femail
+    if best_score >= 0.8:
+        return best, best_score, best_email
+    return None, best_score, None
+
+
 def count_photos(drive, folder_id):
     files = drive.files().list(
         q="'%s' in parents and trashed=false" % folder_id,
@@ -1302,35 +1371,44 @@ def count_photos(drive, folder_id):
             if f.get("mimeType", "").startswith(("image/", "video/"))]
 
 
-def _email_from_folder(name):
-    return name.split("{")[0].strip()
+def _locate(drive, args, data):
+    """Find a customer folder from tool args: spoken email first (if given),
+    else a provided phone, else caller ID. Returns (folder, matched_email)."""
+    args = args if isinstance(args, dict) else {}
+    email_in = (args.get("email") or "").strip()
+    if email_in:
+        folder, _score, matched = find_folder_by_email(drive, email_in)
+        if folder:
+            return folder, matched
+    phone = args.get("phone") or get_caller_phone(data)
+    folder = find_photo_folder(drive, phone)
+    if folder:
+        return folder, _email_from_folder(folder["name"])
+    return None, None
 
 
 @app.route("/photo-lookup-tool", methods=["POST"])
 def photo_lookup_tool():
     data = request.json or {}
     tool_call_id, _, args = extract_tool_call(data)
-    phone = (args.get("phone") if isinstance(args, dict) else None) or get_caller_phone(data)
-
     drive = get_drive_service()
     if not drive:
         return tool_result(tool_call_id,
             "I can't reach the photo library right now. Let me take a message and the team will follow up.")
-
-    folder = find_photo_folder(drive, phone)
+    folder, matched = _locate(drive, args, data)
     if not folder:
         return tool_result(tool_call_id,
-            "I don't see any photos on file for this number. Let me take a message so the team can look into it.")
-
+            "NO_MATCH. I couldn't find any photos under that. Next step: if you have not asked yet, "
+            "ask for the phone number used when ordering; if the phone already failed, ask for the email "
+            "used when ordering; then look up again.")
     photos = count_photos(drive, folder["id"])
-    email = _email_from_folder(folder["name"])
     if not photos:
         return tool_result(tool_call_id,
-            "I found your folder but there are no photos in it yet. I'll flag this for the team to check.")
-
+            "I found the folder but there are no photos in it yet. I'll flag this for the team to check.")
     return tool_result(tool_call_id,
-        ("I found %d photos on file under %s. I can resend them to that email right now, "
-         "or to a different address if you'd prefer. (folder_email=%s)") % (len(photos), email, email))
+        ("FOUND %d photos under the email %s. Read that email back to the caller to confirm it is theirs, "
+         "then offer to resend to it (or to a different address). To send, call resendPhotos with email=%s."
+         ) % (len(photos), matched, matched))
 
 
 @app.route("/photo-resend-tool", methods=["POST"])
@@ -1338,39 +1416,28 @@ def photo_resend_tool():
     data = request.json or {}
     tool_call_id, _, args = extract_tool_call(data)
     args = args if isinstance(args, dict) else {}
-    phone = args.get("phone") or get_caller_phone(data)
-    override_to = (args.get("email") or args.get("to") or "").strip()
-
     drive = get_drive_service()
     if not drive:
         return tool_result(tool_call_id,
             "I can't reach the photo library right now, so I'll have the team email your photos shortly.")
-
-    folder = find_photo_folder(drive, phone)
+    folder, matched = _locate(drive, args, data)
     if not folder:
         return tool_result(tool_call_id,
-            "I couldn't find a photo folder for this number, so I'll pass this to the team to handle.")
-
+            "I couldn't find a matching order, so I'll pass this to the team to handle.")
     photos = count_photos(drive, folder["id"])
     if not photos:
         return tool_result(tool_call_id,
-            "Your folder is there but it has no photos in it yet, so I'll flag it for the team rather than send an empty link.")
-
-    to_addr = override_to or _email_from_folder(folder["name"])
+            "The folder is there but has no photos in it yet, so I'll flag it for the team rather than send an empty link.")
+    send_to = (args.get("send_to") or "").strip() or matched
     link = folder.get("webViewLink", "")
-    subject = "Your Photo Illusions photos"
     body = (
-        "Hi,\n\n"
-        "Here are your photos. View and download them here:\n"
-        "%s\n\n"
-        "(%d photos)\n\n"
-        "If you have any trouble opening them, just reply to this email.\n\n"
+        "Hi,\n\nHere are your photos. View and download them here:\n%s\n\n"
+        "(%d photos)\n\nIf you have any trouble opening them, just reply to this email.\n\n"
         "Thank you,\nPhoto Illusions"
     ) % (link, len(photos))
-
-    ok = send_email(to_addr, subject, body)
+    ok = send_email(send_to, "Your Photo Illusions photos", body)
     if ok:
         return tool_result(tool_call_id,
-            "Done -- I just emailed your %d photos to %s. Please allow a couple of minutes for it to arrive." % (len(photos), to_addr))
+            "Done -- I just emailed your %d photos to %s. Please allow a couple of minutes for it to arrive." % (len(photos), send_to))
     return tool_result(tool_call_id,
-        "I had trouble sending the email just now, so I'll have the team resend your photos to %s shortly." % to_addr)
+        "I had trouble sending just now, so I'll have the team resend your photos to %s shortly." % send_to)
