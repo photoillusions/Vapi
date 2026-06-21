@@ -1238,3 +1238,139 @@ def incoming_sms():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
+
+
+# =============================================================================
+# PHOTO TOOLS  (lookupPhotos + resendPhotos)
+# Caller-ID -> find the customer's event-photo folder in Drive, confirm photos
+# are there, and (on confirm) email the folder link. Folders are named
+# <email>{<phone>}. Uses the same service account as Calendar; the Events
+# folder must be shared with the service account's client_email (Viewer).
+# =============================================================================
+
+DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+
+
+def get_drive_service():
+    try:
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+    except Exception:
+        return None
+    raw = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+    if not raw:
+        return None
+    try:
+        sa_info = json.loads(raw)
+        creds = service_account.Credentials.from_service_account_info(
+            sa_info, scopes=DRIVE_SCOPES
+        )
+        return build("drive", "v3", credentials=creds)
+    except Exception:
+        traceback.print_exc()
+        return None
+
+
+def _only_digits(s):
+    return "".join(ch for ch in str(s or "") if ch.isdigit())
+
+
+def find_photo_folder(drive, phone):
+    digits = _only_digits(phone)
+    if len(digits) < 10:
+        return None
+    last10 = digits[-10:]
+    res = drive.files().list(
+        q=("mimeType='application/vnd.google-apps.folder' and trashed=false "
+           "and name contains '" + last10[-4:] + "'"),
+        fields="files(id,name,webViewLink)", pageSize=100,
+        supportsAllDrives=True, includeItemsFromAllDrives=True,
+    ).execute()
+    for f in res.get("files", []):
+        if last10 in _only_digits(f["name"]):
+            return f
+    return None
+
+
+def count_photos(drive, folder_id):
+    files = drive.files().list(
+        q="'%s' in parents and trashed=false" % folder_id,
+        fields="files(id,mimeType)", pageSize=1000,
+        supportsAllDrives=True, includeItemsFromAllDrives=True,
+    ).execute().get("files", [])
+    return [f for f in files
+            if f.get("mimeType", "").startswith(("image/", "video/"))]
+
+
+def _email_from_folder(name):
+    return name.split("{")[0].strip()
+
+
+@app.route("/photo-lookup-tool", methods=["POST"])
+def photo_lookup_tool():
+    data = request.json or {}
+    tool_call_id, _, args = extract_tool_call(data)
+    phone = (args.get("phone") if isinstance(args, dict) else None) or get_caller_phone(data)
+
+    drive = get_drive_service()
+    if not drive:
+        return tool_result(tool_call_id,
+            "I can't reach the photo library right now. Let me take a message and the team will follow up.")
+
+    folder = find_photo_folder(drive, phone)
+    if not folder:
+        return tool_result(tool_call_id,
+            "I don't see any photos on file for this number. Let me take a message so the team can look into it.")
+
+    photos = count_photos(drive, folder["id"])
+    email = _email_from_folder(folder["name"])
+    if not photos:
+        return tool_result(tool_call_id,
+            "I found your folder but there are no photos in it yet. I'll flag this for the team to check.")
+
+    return tool_result(tool_call_id,
+        ("I found %d photos on file under %s. I can resend them to that email right now, "
+         "or to a different address if you'd prefer. (folder_email=%s)") % (len(photos), email, email))
+
+
+@app.route("/photo-resend-tool", methods=["POST"])
+def photo_resend_tool():
+    data = request.json or {}
+    tool_call_id, _, args = extract_tool_call(data)
+    args = args if isinstance(args, dict) else {}
+    phone = args.get("phone") or get_caller_phone(data)
+    override_to = (args.get("email") or args.get("to") or "").strip()
+
+    drive = get_drive_service()
+    if not drive:
+        return tool_result(tool_call_id,
+            "I can't reach the photo library right now, so I'll have the team email your photos shortly.")
+
+    folder = find_photo_folder(drive, phone)
+    if not folder:
+        return tool_result(tool_call_id,
+            "I couldn't find a photo folder for this number, so I'll pass this to the team to handle.")
+
+    photos = count_photos(drive, folder["id"])
+    if not photos:
+        return tool_result(tool_call_id,
+            "Your folder is there but it has no photos in it yet, so I'll flag it for the team rather than send an empty link.")
+
+    to_addr = override_to or _email_from_folder(folder["name"])
+    link = folder.get("webViewLink", "")
+    subject = "Your Photo Illusions photos"
+    body = (
+        "Hi,\n\n"
+        "Here are your photos. View and download them here:\n"
+        "%s\n\n"
+        "(%d photos)\n\n"
+        "If you have any trouble opening them, just reply to this email.\n\n"
+        "Thank you,\nPhoto Illusions"
+    ) % (link, len(photos))
+
+    ok = send_email(to_addr, subject, body)
+    if ok:
+        return tool_result(tool_call_id,
+            "Done -- I just emailed your %d photos to %s. Please allow a couple of minutes for it to arrive." % (len(photos), to_addr))
+    return tool_result(tool_call_id,
+        "I had trouble sending the email just now, so I'll have the team resend your photos to %s shortly." % to_addr)
