@@ -1481,3 +1481,74 @@ def _photo_resend_from_sms(body):
                    "A text matched the order for %s; sent %d photos." % (matched, len(photos)))
     return ("Sent! We just emailed your %d photos to %s. "
             "Please allow a couple of minutes for it to arrive." % (len(photos), matched))
+
+
+# =============================================================================
+# SMSGATE (sms-gate.app) -- text from Tony's own Android phone instead of Twilio.
+# Cloud mode at api.sms-gate.app, HTTP Basic auth from env SMSGATE_USERNAME /
+# SMSGATE_PASSWORD. Inbound customer texts hit /sms-inbound (register the
+# sms:received webhook once by visiting /register-sms-webhook). A texted email
+# auto-resends the customer's photos and texts back a confirmation.
+# =============================================================================
+SMSGATE_API = "https://api.sms-gate.app/3rdparty/v1"
+
+
+def smsgate_send(to, text):
+    user = os.environ.get("SMSGATE_USERNAME")
+    pw = os.environ.get("SMSGATE_PASSWORD")
+    to = normalize_phone(to)
+    if not (user and pw and to and text):
+        return False
+    try:
+        r = requests.post(
+            SMSGATE_API + "/messages",
+            json={"textMessage": {"text": text}, "phoneNumbers": [to],
+                  "ttl": 3600, "priority": 100},
+            auth=(user, pw), timeout=15,
+        )
+        if r.status_code >= 300:
+            print("smsgate_send error %s: %s" % (r.status_code, r.text[:300]))
+            return False
+        return True
+    except Exception:
+        traceback.print_exc()
+        return False
+
+
+@app.route("/sms-inbound", methods=["POST"])
+def sms_inbound():
+    """Webhook for SMSGate 'sms:received'. If the text contains an email tied to
+    a photo order, resend the photos and text back a confirmation. Returns 2xx
+    fast as the gateway requires."""
+    data = request.get_json(force=True, silent=True) or {}
+    if data.get("event") != "sms:received":
+        return jsonify({"ok": True}), 200
+    payload = data.get("payload", {}) or {}
+    sender = payload.get("sender") or payload.get("phoneNumber")
+    message = payload.get("message", "")
+    reply = _photo_resend_from_sms(message)
+    if reply and sender:
+        smsgate_send(sender, reply)
+    return jsonify({"ok": True}), 200
+
+
+@app.route("/register-sms-webhook", methods=["GET"])
+def register_sms_webhook():
+    """Visit once (in a browser) after setting the SMSGATE_* env vars. Registers
+    the sms:received webhook in the cloud account so inbound texts reach us."""
+    user = os.environ.get("SMSGATE_USERNAME")
+    pw = os.environ.get("SMSGATE_PASSWORD")
+    if not (user and pw):
+        return jsonify({"ok": False, "error": "Set SMSGATE_USERNAME and SMSGATE_PASSWORD first."}), 400
+    base = (PUBLIC_BASE_URL or request.url_root).rstrip("/")
+    hook = base + "/sms-inbound"
+    try:
+        r = requests.post(
+            SMSGATE_API + "/webhooks",
+            json={"url": hook, "event": "sms:received"},
+            auth=(user, pw), timeout=15,
+        )
+        return jsonify({"ok": r.status_code < 300, "status": r.status_code,
+                        "registered_url": hook, "response": r.text[:500]}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
