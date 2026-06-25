@@ -1151,7 +1151,7 @@ def call_logs():
         cutoff = (datetime.utcnow() - timedelta(days=int(days))).isoformat() + "Z"
 
         headers = {"Authorization": f"Bearer {VAPI_PRIVATE_KEY}"}
-        params = {"limit": limit, "createdAtGe": cutoff}
+        params = {"limit": limit, "createdAtGe": cutoff, "assistantId": "94778fbc-a7a1-4727-b0c4-0139f698e7e1"}
         resp = requests.get("https://api.vapi.ai/call", headers=headers, params=params, timeout=15)
 
         if resp.status_code != 200:
